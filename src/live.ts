@@ -311,10 +311,29 @@ export const setTimerAction = (action: 'start' | 'stop' | 'reset') => {
   }
 
   if (action === 'reset') {
+    const resetTeamForRestart = (team: TeamLive) => {
+      team.stats = emptyStats()
+      team.redCarded = []
+      delete team.formationKey
+      team.starters = []
+      team.substitutes = team.players.map((player) => player.id)
+      team.playerStats = team.players.reduce<Record<string, PlayerStats>>((acc, player) => {
+        acc[player.id] = emptyPlayerStats()
+        return acc
+      }, {})
+      team.staffDiscipline = {
+        director: emptyStaffDiscipline(team.technicalStaff?.director?.name),
+        assistant: emptyStaffDiscipline(team.technicalStaff?.assistant?.name),
+      }
+    }
+
     liveMatchStore.timer.running = false
     liveMatchStore.timer.startedAt = null
     liveMatchStore.timer.elapsedSeconds = 0
     liveMatchStore.status = 'scheduled'
+    liveMatchStore.events = []
+    resetTeamForRestart(liveMatchStore.homeTeam)
+    resetTeamForRestart(liveMatchStore.awayTeam)
   }
 }
 
