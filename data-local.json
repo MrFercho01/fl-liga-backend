@@ -1,0 +1,165 @@
+{
+  "users": [
+    {
+      "id": "super-admin",
+      "name": "MrFercho",
+      "email": "mrfercho@flliga.local",
+      "password": "1623Fercho.",
+      "role": "super_admin",
+      "active": true
+    },
+    {
+      "id": "client-adcfd63f",
+      "name": "Fernando Lara",
+      "organizationName": "FL Store",
+      "email": "fernando.lara.moran@gmail.com",
+      "password": "123456",
+      "mustChangePassword": false,
+      "role": "client_admin",
+      "active": true
+    }
+  ],
+  "leagues": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Liga Interbancaria Femenina - Región Costa",
+      "slug": "liga-interbancaria-femenina---region-costa",
+      "country": "Ecuador - Costa",
+      "season": 2026,
+      "slogan": "La mejor liga de bancos",
+      "themeColor": "#0ea5e9",
+      "active": true,
+      "ownerUserId": "super-admin",
+      "categories": [
+        {
+          "id": "11111111-1111-4111-8111-111111111112",
+          "name": "Categoría Única",
+          "minAge": 14,
+          "maxAge": null,
+          "rules": {
+            "playersOnField": 11,
+            "matchMinutes": 90,
+            "breakMinutes": 15,
+            "allowDraws": true,
+            "pointsWin": 3,
+            "pointsDraw": 1,
+            "pointsLoss": 0,
+            "courtsCount": 1,
+            "resolveDrawByPenalties": false,
+            "playoffQualifiedTeams": 4,
+            "playoffHomeAway": false,
+            "finalStageRoundOf16Enabled": false,
+            "finalStageRoundOf8Enabled": false,
+            "finalStageQuarterFinalsEnabled": true,
+            "finalStageSemiFinalsEnabled": true,
+            "finalStageFinalEnabled": true,
+            "finalStageTwoLegged": false,
+            "finalStageRoundOf16TwoLegged": false,
+            "finalStageRoundOf8TwoLegged": false,
+            "finalStageQuarterFinalsTwoLegged": false,
+            "finalStageSemiFinalsTwoLegged": false,
+            "finalStageFinalTwoLegged": false,
+            "doubleRoundRobin": false,
+            "regularSeasonRounds": 3
+          }
+        }
+      ],
+      "logoUrl": "data:image/png;base64,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"
+    }
+  ],
+  "teams": [
+    {
+      "id": "11111111-1111-4111-8111-111111111201",
+      "leagueId": "11111111-1111-4111-8111-111111111111",
+      "categoryId": "11111111-1111-4111-8111-111111111112",
+      "name": "Barcelona SC Femenino",
+      "players": []
+    },
+    {
+      "id": "11111111-1111-4111-8111-111111111202",
+      "leagueId": "11111111-1111-4111-8111-111111111111",
+      "categoryId": "11111111-1111-4111-8111-111111111112",
+      "name": "Emelec Femenino",
+      "players": []
+    },
+    {
+      "id": "11111111-1111-4111-8111-111111111203",
+      "leagueId": "11111111-1111-4111-8111-111111111111",
+      "categoryId": "11111111-1111-4111-8111-111111111112",
+      "name": "Delfín Femenino",
+      "players": []
+    },
+    {
+      "id": "11111111-1111-4111-8111-111111111204",
+      "leagueId": "11111111-1111-4111-8111-111111111111",
+      "categoryId": "11111111-1111-4111-8111-111111111112",
+      "name": "Orense Femenino",
+      "players": []
+    }
+  ],
+  "fixtureSchedule": [
+    {
+      "leagueId": "11111111-1111-4111-8111-111111111111",
+      "categoryId": "11111111-1111-4111-8111-111111111112",
+      "matchId": "manual__1__11111111-1111-4111-8111-111111111201__11111111-1111-4111-8111-111111111202",
+      "round": 1,
+      "scheduledAt": "2026-03-15T17:00:00.000Z",
+      "venue": "Cancha Principal Costa"
+    },
+    {
+      "leagueId": "11111111-1111-4111-8111-111111111111",
+      "categoryId": "11111111-1111-4111-8111-111111111112",
+      "matchId": "manual__1__11111111-1111-4111-8111-111111111203__11111111-1111-4111-8111-111111111204",
+      "round": 1,
+      "scheduledAt": "2026-03-15T19:00:00.000Z",
+      "venue": "Cancha Principal Costa"
+    }
+  ],
+  "roundAwards": [],
+  "playedMatches": [],
+  "auditLogs": [
+    {
+      "id": "8a806d16-47d3-440c-a341-9e0ce56bfe17",
+      "timestamp": "2026-03-07T03:23:50.099Z",
+      "userId": "client-adcfd63f",
+      "userEmail": "fernando.lara.moran@gmail.com",
+      "action": "login_success",
+      "ip": "::1"
+    },
+    {
+      "id": "5f7b4f11-4e66-443e-a5a7-f1d08cf5b12a",
+      "timestamp": "2026-03-07T03:23:02.668Z",
+      "userId": "super-admin",
+      "userEmail": "mrfercho@flliga.local",
+      "action": "logout",
+      "ip": "::1"
+    },
+    {
+      "id": "263459bb-2a93-4d1a-801f-39a5219236aa",
+      "timestamp": "2026-03-07T03:19:53.207Z",
+      "userId": "super-admin",
+      "userEmail": "mrfercho@flliga.local",
+      "action": "login_success",
+      "ip": "::1"
+    }
+  ],
+  "publicEngagement": [
+    {
+      "clientId": "client-adcfd63f",
+      "visits": 2,
+      "likes": 0,
+      "updatedAt": "2026-03-07T03:25:04.647Z"
+    }
+  ],
+  "publicMatchLikes": [],
+  "clientAccessTokens": [
+    {
+      "id": "a4997923-3c27-4fb0-ab33-26ddb3fc4f69",
+      "clientUserId": "client-adcfd63f",
+      "token": "cli_b40dfd2900964bc3b7ab1e17210a364e",
+      "expiresAt": "2026-03-10T03:22:00.000Z",
+      "active": true,
+      "createdAt": "2026-03-07T03:22:24.919Z"
+    }
+  ]
+}
