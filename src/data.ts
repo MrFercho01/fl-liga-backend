@@ -623,6 +623,26 @@ export const persistLocalData = () => {
   queueMongoPersist(snapshot)
 }
 
+export const flushPersistQueue = async () => {
+  await persistQueue
+}
+
+export const refreshStoresFromMongoSnapshot = async () => {
+  if (!hasMongoConfigured()) return false
+
+  try {
+    const mongoDoc = await readMongoSnapshot()
+    if (!mongoDoc?.snapshot) return false
+
+    const fallbackUsers = [...usersStore]
+    hydrateAllStores(mongoDoc.snapshot, fallbackUsers)
+    return true
+  } catch (error) {
+    console.error('No se pudo refrescar estado desde MongoDB:', error)
+    return false
+  }
+}
+
 export const initializeDataStore = async () => {
   let loadedFromMongo = false
   const fallbackUsers = [...usersStore]

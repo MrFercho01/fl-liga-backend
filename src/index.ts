@@ -11,12 +11,14 @@ import {
   clientAccessTokensStore,
   ensureOperationalSeedData,
   fixtureScheduleStore,
+  flushPersistQueue,
   initializeDataStore,
   leaguesStore,
   persistLocalData,
   playedMatchesStore,
   publicEngagementStore,
   publicMatchLikesStore,
+  refreshStoresFromMongoSnapshot,
   roundAwardsStore,
   type RegisteredPlayer,
   type RegisteredTeam,
@@ -404,9 +406,11 @@ app.get('/api/live/match', (_request, response) => {
   response.json({ data: buildLiveSnapshot() })
 })
 
-app.get('/api/leagues', (request, response) => {
+app.get('/api/leagues', async (request, response) => {
   const user = requireAuth(request, response)
   if (!user) return
+
+  await refreshStoresFromMongoSnapshot()
 
   ensureOperationalSeedData()
 
@@ -746,9 +750,11 @@ app.patch('/api/admin/client-access-tokens/:tokenId/renew', (request, response) 
   response.json({ data: token })
 })
 
-app.get('/api/leagues/:leagueId/categories', (request, response) => {
+app.get('/api/leagues/:leagueId/categories', async (request, response) => {
   const user = requireAuth(request, response)
   if (!user) return
+
+  await refreshStoresFromMongoSnapshot()
 
   const league = leaguesStore.find((item) => item.id === request.params.leagueId)
   if (!league) {
@@ -1251,7 +1257,7 @@ const updateCategoryRulesSchema = z.object({
     .strict(),
 })
 
-app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', (request, response) => {
+app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', async (request, response) => {
   const user = requireAuth(request, response)
   if (!user) return
 
@@ -1358,6 +1364,7 @@ app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', (request,
 
   leaguesStore[leagueIndex] = nextLeague
   persistLocalData()
+  await flushPersistQueue()
 
   response.json({ data: nextLeague })
 })
