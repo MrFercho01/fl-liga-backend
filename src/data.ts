@@ -4,6 +4,7 @@ import { MongoClient, type Collection } from 'mongodb'
 
 export interface RuleSet {
   playersOnField: number
+  maxRegisteredPlayers?: number
   matchMinutes: number
   breakMinutes: number
   allowDraws: boolean
@@ -45,6 +46,7 @@ export interface League {
   season: number
   slogan?: string
   themeColor?: string
+  backgroundImageUrl?: string
   active: boolean
   ownerUserId: string
   logoUrl?: string
@@ -361,6 +363,7 @@ const seedLeague: League = {
       maxAge: null,
       rules: {
         playersOnField: 11,
+        maxRegisteredPlayers: 25,
         matchMinutes: 90,
         breakMinutes: 15,
         allowDraws: true,

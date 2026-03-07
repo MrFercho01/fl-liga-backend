@@ -974,6 +974,7 @@ app.get('/api/public/client/:clientId/leagues', (request, response) => {
       season: league.season,
       slogan: league.slogan,
       themeColor: league.themeColor,
+      backgroundImageUrl: league.backgroundImageUrl,
       logoUrl: league.logoUrl,
       categories: league.categories.map((category) => ({
         id: category.id,
@@ -1198,6 +1199,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', (request, resp
         season: league.season,
         slogan: league.slogan,
         themeColor: league.themeColor,
+        backgroundImageUrl: league.backgroundImageUrl,
         logoUrl: league.logoUrl,
       },
       category: {
@@ -1221,6 +1223,7 @@ const updateCategoryRulesSchema = z.object({
   rules: z
     .object({
       playersOnField: z.number().int().min(5).max(11).optional(),
+      maxRegisteredPlayers: z.number().int().min(5).max(60).optional(),
       matchMinutes: z.number().int().min(20).max(120).optional(),
       breakMinutes: z.number().int().min(0).max(30).optional(),
       allowDraws: z.boolean().optional(),
@@ -1291,6 +1294,7 @@ app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', (request,
   const incomingRules = parsed.data.rules
 
   if (incomingRules.playersOnField !== undefined) nextRules.playersOnField = incomingRules.playersOnField
+  if (incomingRules.maxRegisteredPlayers !== undefined) nextRules.maxRegisteredPlayers = incomingRules.maxRegisteredPlayers
   if (incomingRules.matchMinutes !== undefined) nextRules.matchMinutes = incomingRules.matchMinutes
   if (incomingRules.breakMinutes !== undefined) nextRules.breakMinutes = incomingRules.breakMinutes
   if (incomingRules.allowDraws !== undefined) nextRules.allowDraws = incomingRules.allowDraws
@@ -1498,6 +1502,8 @@ const createPlayerSchema = z.object({
   number: z.number().int().min(1).max(99),
   position: z.string().min(2),
   photoUrl: z.string().trim().min(1).optional(),
+  replacePlayerId: z.string().uuid().optional(),
+  replacementReason: z.enum(['injury']).optional(),
 })
 
 app.post('/api/admin/teams/:teamId/players', (request, response) => {
@@ -1524,6 +1530,28 @@ app.post('/api/admin/teams/:teamId/players', (request, response) => {
   const parsed = createPlayerSchema.safeParse(request.body)
   if (!parsed.success) {
     response.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() })
+    return
+  }
+
+  const category = league.categories.find((item) => item.id === team.categoryId)
+  const maxRegisteredPlayers = Math.max(5, category?.rules.maxRegisteredPlayers ?? 25)
+  const replacingPlayerId = parsed.data.replacePlayerId
+  const replacementReason = parsed.data.replacementReason
+
+  if (replacingPlayerId && replacementReason !== 'injury') {
+    response.status(400).json({ message: 'Para reemplazar una jugadora debes indicar motivo lesión' })
+    return
+  }
+
+  if (replacingPlayerId) {
+    const replacedIndex = team.players.findIndex((item) => item.id === replacingPlayerId)
+    if (replacedIndex === -1) {
+      response.status(404).json({ message: 'La jugadora a reemplazar no existe en el equipo' })
+      return
+    }
+    team.players.splice(replacedIndex, 1)
+  } else if (team.players.length >= maxRegisteredPlayers) {
+    response.status(409).json({ message: `Cupo completo: máximo ${maxRegisteredPlayers} jugadoras. Elimina una o usa reemplazo por lesión.` })
     return
   }
 
@@ -2362,6 +2390,7 @@ app.post('/api/admin/live/load-match', (request, response) => {
 
 const ruleSchema = z.object({
   playersOnField: z.number().int().min(5).max(11),
+  maxRegisteredPlayers: z.number().int().min(5).max(60).optional().default(25),
   matchMinutes: z.number().int().min(20).max(120),
   breakMinutes: z.number().int().min(0).max(30),
   allowDraws: z.boolean(),
@@ -2401,6 +2430,7 @@ const createLeagueSchema = z.object({
   season: z.number().int().min(2000).max(2100).default(2026),
   slogan: z.string().trim().min(2).optional(),
   themeColor: z.string().trim().regex(/^#([0-9a-fA-F]{6})$/).optional(),
+  backgroundImageUrl: z.string().trim().min(1).optional(),
   active: z.boolean().default(true),
   logoUrl: z.string().trim().min(1).optional(),
   categories: z.array(categorySchema).min(1),
@@ -2432,6 +2462,7 @@ app.post('/api/admin/leagues', (request, response) => {
     season: parsed.data.season,
     ...(parsed.data.slogan ? { slogan: parsed.data.slogan } : {}),
     ...(parsed.data.themeColor ? { themeColor: parsed.data.themeColor } : {}),
+    ...(parsed.data.backgroundImageUrl ? { backgroundImageUrl: parsed.data.backgroundImageUrl } : {}),
     active: parsed.data.active,
     ownerUserId: user.role === 'super_admin' ? SUPER_ADMIN_USER_ID : user.id,
     ...(parsed.data.logoUrl ? { logoUrl: parsed.data.logoUrl } : {}),
@@ -2511,6 +2542,14 @@ app.patch('/api/admin/leagues/:leagueId', (request, response) => {
       nextLeague.themeColor = payload.themeColor
     } else {
       delete nextLeague.themeColor
+    }
+  }
+
+  if (payload.backgroundImageUrl !== undefined) {
+    if (payload.backgroundImageUrl) {
+      nextLeague.backgroundImageUrl = payload.backgroundImageUrl
+    } else {
+      delete nextLeague.backgroundImageUrl
     }
   }
 
