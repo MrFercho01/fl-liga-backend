@@ -568,7 +568,14 @@ export const ensureOperationalSeedData = () => {
 }
 
 const applyLocalBaseOnlyMode = () => {
-  const enabled = (process.env.FL_LOCAL_BASE_ONLY ?? '1') !== '0'
+  const flagEnabled = (process.env.FL_LOCAL_BASE_ONLY ?? '0') === '1'
+  const isProduction = (process.env.NODE_ENV ?? '').trim().toLowerCase() === 'production'
+  const enabled = flagEnabled && !isProduction
+
+  if (flagEnabled && isProduction) {
+    console.warn('FL_LOCAL_BASE_ONLY=1 ignorado en producción para evitar reseteo de datos.')
+  }
+
   if (!enabled) return
 
   usersStore.length = 0
