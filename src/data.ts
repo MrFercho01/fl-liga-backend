@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { MongoClient, type Collection } from 'mongodb'
 
 export interface RuleSet {
   playersOnField: number
@@ -249,7 +250,7 @@ export const SUPER_ADMIN_USER_ID = 'super-admin'
 
 const localDbPath = path.resolve(__dirname, '..', 'data-local.json')
 
-type LocalSnapshot = {
+export type LocalSnapshot = {
   users?: AppUser[]
   leagues?: League[]
   teams?: RegisteredTeam[]
@@ -262,9 +263,23 @@ type LocalSnapshot = {
   clientAccessTokens?: ClientAccessTokenEntry[]
 }
 
+type MongoSnapshotDocument = {
+  _id: string
+  snapshot: LocalSnapshot
+  updatedAt: string
+}
+
 const defaultSuperAdminName = process.env.SUPER_ADMIN_NAME?.trim() || 'MrFercho'
 const defaultSuperAdminEmail = process.env.SUPER_ADMIN_EMAIL?.trim() || 'mrfercho@flliga.local'
 const defaultSuperAdminPassword = process.env.SUPER_ADMIN_PASSWORD?.trim() || '1623Fercho.'
+const mongoUri = process.env.MONGODB_URI?.trim() || ''
+const mongoDbName = process.env.MONGODB_DB_NAME?.trim() || 'fl_liga'
+const mongoCollectionName = process.env.MONGODB_COLLECTION_NAME?.trim() || 'app_state'
+const mongoStateDocumentId = process.env.MONGODB_STATE_DOCUMENT_ID?.trim() || 'main'
+
+let mongoClient: MongoClient | null = null
+let mongoCollection: Collection<MongoSnapshotDocument> | null = null
+let persistQueue: Promise<void> = Promise.resolve()
 
 export const usersStore: AppUser[] = [
   {
@@ -405,6 +420,79 @@ const hydrateStore = <T>(target: T[], source: T[] | undefined, fallback?: T[]) =
   }
 }
 
+const hydrateAllStores = (snapshot: LocalSnapshot, fallbackUsers?: AppUser[]) => {
+  hydrateStore(usersStore, snapshot.users, fallbackUsers)
+  hydrateStore(leaguesStore, snapshot.leagues)
+  hydrateStore(teamsStore, snapshot.teams)
+  hydrateStore(fixtureScheduleStore, snapshot.fixtureSchedule)
+  hydrateStore(roundAwardsStore, snapshot.roundAwards)
+  hydrateStore(playedMatchesStore, snapshot.playedMatches)
+  hydrateStore(auditLogsStore, snapshot.auditLogs)
+  hydrateStore(publicEngagementStore, snapshot.publicEngagement)
+  hydrateStore(publicMatchLikesStore, snapshot.publicMatchLikes)
+  hydrateStore(clientAccessTokensStore, snapshot.clientAccessTokens)
+}
+
+const buildSnapshot = (): LocalSnapshot => ({
+  users: usersStore,
+  leagues: leaguesStore,
+  teams: teamsStore,
+  fixtureSchedule: fixtureScheduleStore,
+  roundAwards: roundAwardsStore,
+  playedMatches: playedMatchesStore,
+  auditLogs: auditLogsStore,
+  publicEngagement: publicEngagementStore,
+  publicMatchLikes: publicMatchLikesStore,
+  clientAccessTokens: clientAccessTokensStore,
+})
+
+const hasMongoConfigured = () => mongoUri.length > 0
+
+const connectMongo = async () => {
+  if (!hasMongoConfigured()) return null
+  if (mongoCollection) return mongoCollection
+
+  mongoClient = new MongoClient(mongoUri)
+  await mongoClient.connect()
+  const db = mongoClient.db(mongoDbName)
+  mongoCollection = db.collection<MongoSnapshotDocument>(mongoCollectionName)
+  return mongoCollection
+}
+
+const readMongoSnapshot = async () => {
+  const collection = await connectMongo()
+  if (!collection) return null
+  return collection.findOne({ _id: mongoStateDocumentId })
+}
+
+const persistMongoSnapshot = async (snapshot: LocalSnapshot) => {
+  const collection = await connectMongo()
+  if (!collection) return
+
+  await collection.updateOne(
+    { _id: mongoStateDocumentId },
+    {
+      $set: {
+        snapshot,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+    { upsert: true },
+  )
+}
+
+const queueMongoPersist = (snapshot: LocalSnapshot) => {
+  if (!hasMongoConfigured()) return
+
+  persistQueue = persistQueue
+    .then(async () => {
+      await persistMongoSnapshot(snapshot)
+    })
+    .catch((error) => {
+      console.error('No se pudo persistir snapshot en MongoDB:', error)
+    })
+}
+
 const loadLocalData = () => {
   if (!fs.existsSync(localDbPath)) return
 
@@ -413,16 +501,7 @@ const loadLocalData = () => {
     const parsed = JSON.parse(raw) as LocalSnapshot
 
     const fallbackUsers = [...usersStore]
-    hydrateStore(usersStore, parsed.users, fallbackUsers)
-    hydrateStore(leaguesStore, parsed.leagues)
-    hydrateStore(teamsStore, parsed.teams)
-    hydrateStore(fixtureScheduleStore, parsed.fixtureSchedule)
-    hydrateStore(roundAwardsStore, parsed.roundAwards)
-    hydrateStore(playedMatchesStore, parsed.playedMatches)
-    hydrateStore(auditLogsStore, parsed.auditLogs)
-    hydrateStore(publicEngagementStore, parsed.publicEngagement)
-    hydrateStore(publicMatchLikesStore, parsed.publicMatchLikes)
-    hydrateStore(clientAccessTokensStore, parsed.clientAccessTokens)
+    hydrateAllStores(parsed, fallbackUsers)
   } catch {
     // si el archivo local está corrupto, se mantiene estado en memoria por defecto
   }
@@ -511,23 +590,33 @@ const applyLocalBaseOnlyMode = () => {
 }
 
 export const persistLocalData = () => {
-  const snapshot: LocalSnapshot = {
-    users: usersStore,
-    leagues: leaguesStore,
-    teams: teamsStore,
-    fixtureSchedule: fixtureScheduleStore,
-    roundAwards: roundAwardsStore,
-    playedMatches: playedMatchesStore,
-    auditLogs: auditLogsStore,
-    publicEngagement: publicEngagementStore,
-    publicMatchLikes: publicMatchLikesStore,
-    clientAccessTokens: clientAccessTokensStore,
-  }
+  const snapshot = buildSnapshot()
 
   fs.writeFileSync(localDbPath, JSON.stringify(snapshot, null, 2), 'utf-8')
+  queueMongoPersist(snapshot)
 }
 
-loadLocalData()
-ensureSeedData()
-applyLocalBaseOnlyMode()
-persistLocalData()
+export const initializeDataStore = async () => {
+  let loadedFromMongo = false
+  const fallbackUsers = [...usersStore]
+
+  if (hasMongoConfigured()) {
+    try {
+      const mongoDoc = await readMongoSnapshot()
+      if (mongoDoc?.snapshot) {
+        hydrateAllStores(mongoDoc.snapshot, fallbackUsers)
+        loadedFromMongo = true
+      }
+    } catch (error) {
+      console.error('No se pudo cargar estado desde MongoDB. Se usará persistencia local.', error)
+    }
+  }
+
+  if (!loadedFromMongo) {
+    loadLocalData()
+  }
+
+  ensureSeedData()
+  applyLocalBaseOnlyMode()
+  persistLocalData()
+}

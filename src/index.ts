@@ -11,6 +11,7 @@ import {
   clientAccessTokensStore,
   ensureOperationalSeedData,
   fixtureScheduleStore,
+  initializeDataStore,
   leaguesStore,
   persistLocalData,
   playedMatchesStore,
@@ -2696,11 +2697,21 @@ io.on('connection', (socket) => {
   socket.emit('live:update', buildLiveSnapshot())
 })
 
-const migratedLineupsCount = migratePlayedMatchesLineups()
-if (migratedLineupsCount > 0) {
-  console.log(`Migración de lineups históricos completada: ${migratedLineupsCount} partidos actualizados.`)
+const startServer = async () => {
+  await initializeDataStore()
+
+  const migratedLineupsCount = migratePlayedMatchesLineups()
+  if (migratedLineupsCount > 0) {
+    persistLocalData()
+    console.log(`Migración de lineups históricos completada: ${migratedLineupsCount} partidos actualizados.`)
+  }
+
+  httpServer.listen(port, () => {
+    console.log(`FL Liga API corriendo en http://localhost:${port}`)
+  })
 }
 
-httpServer.listen(port, () => {
-  console.log(`FL Liga API corriendo en http://localhost:${port}`)
+startServer().catch((error) => {
+  console.error('No se pudo iniciar FL Liga API:', error)
+  process.exit(1)
 })
