@@ -2187,9 +2187,22 @@ const playedMatchSchema = z.object({
   events: z.array(
     z.object({
       clock: z.string(),
-      type: z.enum(['shot', 'goal', 'penalty_goal', 'penalty_miss', 'yellow', 'red', 'double_yellow', 'assist', 'substitution']),
+      type: z.enum([
+        'shot',
+        'goal',
+        'penalty_goal',
+        'penalty_miss',
+        'yellow',
+        'red',
+        'double_yellow',
+        'assist',
+        'substitution',
+        'staff_yellow',
+        'staff_red',
+      ]),
       teamName: z.string(),
       playerName: z.string(),
+      staffRole: z.enum(['director', 'assistant']).optional(),
     }),
   ),
   highlightVideos: z.array(
@@ -2265,7 +2278,13 @@ app.post('/api/admin/leagues/:leagueId/played-matches', (request, response) => {
     ...(normalizedAwayLineup ? { awayLineup: normalizedAwayLineup } : {}),
     players: parsed.data.players,
     goals: parsed.data.goals,
-    events: parsed.data.events,
+    events: parsed.data.events.map((event) => ({
+      clock: event.clock,
+      type: event.type,
+      teamName: event.teamName,
+      playerName: event.playerName,
+      ...(event.staffRole ? { staffRole: event.staffRole } : {}),
+    })),
     highlightVideos: parsed.data.highlightVideos,
     playedAt: parsed.data.playedAt,
   }
@@ -2709,7 +2728,20 @@ app.post('/api/admin/live/lineup', (request, response) => {
 const liveEventSchema = z.object({
   teamId: z.string().uuid(),
   playerId: z.string().uuid().nullable(),
-  type: z.enum(['shot', 'goal', 'penalty_goal', 'penalty_miss', 'yellow', 'red', 'double_yellow', 'assist', 'substitution']),
+  staffRole: z.enum(['director', 'assistant']).optional(),
+  type: z.enum([
+    'shot',
+    'goal',
+    'penalty_goal',
+    'penalty_miss',
+    'yellow',
+    'red',
+    'double_yellow',
+    'assist',
+    'substitution',
+    'staff_yellow',
+    'staff_red',
+  ]),
 })
 
 app.post('/api/admin/live/events', (request, response) => {
@@ -2722,7 +2754,12 @@ app.post('/api/admin/live/events', (request, response) => {
     return
   }
 
-  const result = registerEvent(parsed.data.teamId, parsed.data.type, parsed.data.playerId)
+  const result = registerEvent(
+    parsed.data.teamId,
+    parsed.data.type,
+    parsed.data.playerId,
+    parsed.data.staffRole ? { staffRole: parsed.data.staffRole } : undefined,
+  )
   if (!result.ok) {
     response.status(400).json({ message: result.message })
     return

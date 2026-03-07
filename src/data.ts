@@ -173,9 +173,21 @@ export interface PlayedMatchRecord {
   goals: MatchGoal[]
   events: Array<{
     clock: string
-    type: 'shot' | 'goal' | 'penalty_goal' | 'penalty_miss' | 'yellow' | 'red' | 'double_yellow' | 'assist' | 'substitution'
+    type:
+      | 'shot'
+      | 'goal'
+      | 'penalty_goal'
+      | 'penalty_miss'
+      | 'yellow'
+      | 'red'
+      | 'double_yellow'
+      | 'assist'
+      | 'substitution'
+      | 'staff_yellow'
+      | 'staff_red'
     teamName: string
     playerName: string
+    staffRole?: 'director' | 'assistant'
   }>
   highlightVideos: MatchHighlightVideo[]
   playedAt: string

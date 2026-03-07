@@ -1,7 +1,20 @@
 import { v4 as uuidv4 } from 'uuid'
 import type { RegisteredTeam } from './data'
 
-export type LiveEventType = 'shot' | 'goal' | 'penalty_goal' | 'penalty_miss' | 'yellow' | 'red' | 'double_yellow' | 'assist' | 'substitution'
+export type LiveEventType =
+  | 'shot'
+  | 'goal'
+  | 'penalty_goal'
+  | 'penalty_miss'
+  | 'yellow'
+  | 'red'
+  | 'double_yellow'
+  | 'assist'
+  | 'substitution'
+  | 'staff_yellow'
+  | 'staff_red'
+
+export type LiveStaffRole = 'director' | 'assistant'
 
 export interface Player {
   id: string
@@ -32,11 +45,35 @@ export interface PlayerStats {
 export interface TeamLive {
   id: string
   name: string
+  technicalStaff?: {
+    director?: {
+      name: string
+      photoUrl?: string
+    }
+    assistant?: {
+      name: string
+      photoUrl?: string
+    }
+  }
   players: Player[]
   starters: string[]
   substitutes: string[]
   formationKey?: string
   redCarded: string[]
+  staffDiscipline: {
+    director: {
+      name?: string
+      yellows: number
+      reds: number
+      sentOff: boolean
+    }
+    assistant: {
+      name?: string
+      yellows: number
+      reds: number
+      sentOff: boolean
+    }
+  }
   stats: TeamStats
   playerStats: Record<string, PlayerStats>
 }
@@ -61,6 +98,7 @@ export interface MatchEvent {
   teamId: string
   playerId: string | null
   type: LiveEventType
+  staffRole?: LiveStaffRole
   minute: number
   elapsedSeconds: number
   clock: string
@@ -107,6 +145,13 @@ const emptyPlayerStats = (): PlayerStats => ({
   assists: 0,
 })
 
+const emptyStaffDiscipline = (name?: string) => ({
+  ...(name ? { name } : {}),
+  yellows: 0,
+  reds: 0,
+  sentOff: false,
+})
+
 const createTeam = (name: string): TeamLive => {
   const players = createPlayers(name)
   const starters = players.slice(0, 11).map((player) => player.id)
@@ -123,6 +168,10 @@ const createTeam = (name: string): TeamLive => {
     starters,
     substitutes,
     redCarded: [],
+    staffDiscipline: {
+      director: emptyStaffDiscipline(),
+      assistant: emptyStaffDiscipline(),
+    },
     stats: emptyStats(),
     playerStats,
   }
@@ -150,10 +199,15 @@ const createTeamFromRegistered = (team: RegisteredTeam, playersOnField: number):
   return {
     id: team.id,
     name: team.name,
+    ...(team.technicalStaff ? { technicalStaff: team.technicalStaff } : {}),
     players,
     starters,
     substitutes,
     redCarded: [],
+    staffDiscipline: {
+      director: emptyStaffDiscipline(team.technicalStaff?.director?.name),
+      assistant: emptyStaffDiscipline(team.technicalStaff?.assistant?.name),
+    },
     stats: emptyStats(),
     playerStats,
   }
@@ -273,7 +327,21 @@ export const setMatchStatusAction = (action: 'finish') => {
   }
 }
 
-const applyStatByEvent = (team: TeamLive, eventType: LiveEventType, playerId: string | null) => {
+const applyStatByEvent = (team: TeamLive, eventType: LiveEventType, playerId: string | null, staffRole?: LiveStaffRole) => {
+  if (eventType === 'staff_yellow' || eventType === 'staff_red') {
+    if (!staffRole) return
+
+    const staffStats = team.staffDiscipline[staffRole]
+    if (eventType === 'staff_yellow') {
+      staffStats.yellows += 1
+    }
+    if (eventType === 'staff_red') {
+      staffStats.reds += 1
+      staffStats.sentOff = true
+    }
+    return
+  }
+
   if (eventType === 'shot') team.stats.shots += 1
   if (eventType === 'goal') team.stats.goals += 1
   if (eventType === 'penalty_goal') {
@@ -315,7 +383,12 @@ const applyStatByEvent = (team: TeamLive, eventType: LiveEventType, playerId: st
   }
 }
 
-export const registerEvent = (teamId: string, eventType: LiveEventType, playerId: string | null) => {
+export const registerEvent = (
+  teamId: string,
+  eventType: LiveEventType,
+  playerId: string | null,
+  options?: { staffRole?: LiveStaffRole },
+) => {
   if (liveMatchStore.status === 'scheduled') {
     return { ok: false as const, message: 'Debes iniciar el partido para registrar eventos' }
   }
@@ -326,6 +399,43 @@ export const registerEvent = (teamId: string, eventType: LiveEventType, playerId
 
   const team = findTeam(teamId)
   if (!team) return { ok: false as const, message: 'Equipo no encontrado' }
+
+  if (eventType === 'staff_yellow' || eventType === 'staff_red') {
+    if (playerId !== null) {
+      return { ok: false as const, message: 'Eventos de DT/AT no deben incluir jugadora' }
+    }
+
+    const staffRole = options?.staffRole
+    if (!staffRole) {
+      return { ok: false as const, message: 'Debes indicar si la tarjeta es para DT o AT' }
+    }
+
+    const staffName = team.technicalStaff?.[staffRole]?.name?.trim()
+    if (!staffName) {
+      return {
+        ok: false as const,
+        message: staffRole === 'director' ? 'Este equipo no tiene DT registrado' : 'Este equipo no tiene AT registrado',
+      }
+    }
+
+    applyStatByEvent(team, eventType, null, staffRole)
+
+    const elapsedSeconds = getElapsedSeconds()
+
+    liveMatchStore.events.unshift({
+      id: uuidv4(),
+      timestamp: new Date().toISOString(),
+      teamId,
+      playerId: null,
+      type: eventType,
+      staffRole,
+      minute: Math.floor(elapsedSeconds / 60),
+      elapsedSeconds,
+      clock: formatClock(elapsedSeconds),
+    })
+
+    return { ok: true as const }
+  }
 
   if (playerId) {
     const exists = team.players.some((player) => player.id === playerId)
