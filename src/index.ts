@@ -1195,6 +1195,21 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', (request, resp
         playedAt: item.playedAt,
       }
     })
+  const roundAwards = roundAwardsStore
+    .filter((item) => item.leagueId === league.id && item.categoryId === categoryId)
+    .map((item) => {
+      const roundBestPlayer = item.roundBestPlayerId ? playerMetaById.get(item.roundBestPlayerId) : null
+
+      return {
+        round: item.round,
+        ...(item.roundBestPlayerId ? { roundBestPlayerId: item.roundBestPlayerId } : {}),
+        ...(item.roundBestPlayerName ? { roundBestPlayerName: item.roundBestPlayerName } : {}),
+        ...(item.roundBestPlayerTeamId ? { roundBestPlayerTeamId: item.roundBestPlayerTeamId } : {}),
+        ...(item.roundBestPlayerTeamName ? { roundBestPlayerTeamName: item.roundBestPlayerTeamName } : {}),
+        ...(roundBestPlayer?.photoUrl ? { roundBestPlayerPhotoUrl: roundBestPlayer.photoUrl } : {}),
+        updatedAt: item.updatedAt,
+      }
+    })
 
   response.json({
     data: {
@@ -1221,6 +1236,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', (request, resp
       schedule,
       playedMatchIds,
       playedMatches,
+      roundAwards,
     },
   })
 })
