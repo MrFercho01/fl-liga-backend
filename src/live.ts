@@ -97,6 +97,7 @@ export interface MatchEvent {
   timestamp: string
   teamId: string
   playerId: string | null
+  substitutionInPlayerId?: string
   type: LiveEventType
   staffRole?: LiveStaffRole
   minute: number
@@ -406,7 +407,7 @@ export const registerEvent = (
   teamId: string,
   eventType: LiveEventType,
   playerId: string | null,
-  options?: { staffRole?: LiveStaffRole },
+  options?: { staffRole?: LiveStaffRole; substitutionInPlayerId?: string },
 ) => {
   if (liveMatchStore.status === 'scheduled') {
     return { ok: false as const, message: 'Debes iniciar el partido para registrar eventos' }
@@ -422,6 +423,10 @@ export const registerEvent = (
   if (eventType === 'staff_yellow' || eventType === 'staff_red') {
     if (playerId !== null) {
       return { ok: false as const, message: 'Eventos de DT/AT no deben incluir jugadora' }
+    }
+
+    if (options?.substitutionInPlayerId) {
+      return { ok: false as const, message: 'Eventos de DT/AT no deben incluir jugadora de cambio' }
     }
 
     const staffRole = options?.staffRole
@@ -456,6 +461,30 @@ export const registerEvent = (
     return { ok: true as const }
   }
 
+  if (eventType === 'substitution') {
+    if (!playerId) {
+      return { ok: false as const, message: 'Debes indicar la jugadora que sale' }
+    }
+
+    const incomingPlayerId = options?.substitutionInPlayerId
+    if (!incomingPlayerId) {
+      return { ok: false as const, message: 'Debes indicar la jugadora que entra' }
+    }
+
+    if (incomingPlayerId === playerId) {
+      return { ok: false as const, message: 'Las jugadoras del cambio deben ser distintas' }
+    }
+
+    const incomingExists = team.players.some((player) => player.id === incomingPlayerId)
+    if (!incomingExists) {
+      return { ok: false as const, message: 'Jugador que entra no inscrito en el equipo' }
+    }
+
+    if (team.redCarded.includes(incomingPlayerId)) {
+      return { ok: false as const, message: 'Jugador que entra expulsado: no puede reingresar' }
+    }
+  }
+
   if (playerId) {
     const exists = team.players.some((player) => player.id === playerId)
     if (!exists) return { ok: false as const, message: 'Jugador no inscrito en el equipo' }
@@ -476,6 +505,9 @@ export const registerEvent = (
     timestamp: new Date().toISOString(),
     teamId,
     playerId,
+    ...(eventType === 'substitution' && options?.substitutionInPlayerId
+      ? { substitutionInPlayerId: options.substitutionInPlayerId }
+      : {}),
     type: eventType,
     minute: Math.floor(elapsedSeconds / 60),
     elapsedSeconds,

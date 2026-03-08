@@ -2225,6 +2225,7 @@ const playedMatchSchema = z.object({
       ]),
       teamName: z.string(),
       playerName: z.string(),
+      substitutionInPlayerName: z.string().optional(),
       staffRole: z.enum(['director', 'assistant']).optional(),
     }),
   ),
@@ -2306,6 +2307,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches', (request, response) => {
       type: event.type,
       teamName: event.teamName,
       playerName: event.playerName,
+      ...(event.substitutionInPlayerName ? { substitutionInPlayerName: event.substitutionInPlayerName } : {}),
       ...(event.staffRole ? { staffRole: event.staffRole } : {}),
     })),
     highlightVideos: parsed.data.highlightVideos,
@@ -2751,6 +2753,7 @@ app.post('/api/admin/live/lineup', (request, response) => {
 const liveEventSchema = z.object({
   teamId: z.string().uuid(),
   playerId: z.string().uuid().nullable(),
+  substitutionInPlayerId: z.string().uuid().optional(),
   staffRole: z.enum(['director', 'assistant']).optional(),
   type: z.enum([
     'shot',
@@ -2781,7 +2784,10 @@ app.post('/api/admin/live/events', (request, response) => {
     parsed.data.teamId,
     parsed.data.type,
     parsed.data.playerId,
-    parsed.data.staffRole ? { staffRole: parsed.data.staffRole } : undefined,
+    {
+      ...(parsed.data.staffRole ? { staffRole: parsed.data.staffRole } : {}),
+      ...(parsed.data.substitutionInPlayerId ? { substitutionInPlayerId: parsed.data.substitutionInPlayerId } : {}),
+    },
   )
   if (!result.ok) {
     response.status(400).json({ message: result.message })
