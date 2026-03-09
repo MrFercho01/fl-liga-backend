@@ -1192,6 +1192,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', (request, resp
         ...(mvpPlayer?.teamName ? { playerOfMatchTeamName: mvpPlayer.teamName } : {}),
         ...(item.homeLineup ? { homeLineup: item.homeLineup } : {}),
         ...(item.awayLineup ? { awayLineup: item.awayLineup } : {}),
+        highlightVideos: item.highlightVideos,
         playedAt: item.playedAt,
       }
     })
