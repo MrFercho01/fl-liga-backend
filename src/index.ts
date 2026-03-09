@@ -132,15 +132,18 @@ const loginSchema = z.object({
   accessToken: z.string().min(12).optional(),
 })
 
+const isClientAccessTokenActive = (entry: { active: boolean; expiresAt: string }) => {
+  if (!entry.active) return false
+  const expiresAtMs = new Date(entry.expiresAt).getTime()
+  return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()
+}
+
 const findValidClientAccessToken = (rawToken: string) => {
   const token = rawToken.trim()
   if (!token) return null
 
   const entry = clientAccessTokensStore.find((item) => item.token === token)
-  if (!entry || !entry.active) return null
-
-  const expiresAtMs = new Date(entry.expiresAt).getTime()
-  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) return null
+  if (!entry || !isClientAccessTokenActive(entry)) return null
 
   const clientUser = usersStore.find((item) => item.id === entry.clientUserId && item.active && item.role === 'client_admin')
   if (!clientUser) return null
@@ -594,10 +597,22 @@ app.get('/api/admin/client-access-tokens', (request, response) => {
   const user = requireSuperAdmin(request, response)
   if (!user) return
 
+  let shouldPersist = false
+  const nowIso = new Date().toISOString()
+
   const data = clientAccessTokensStore
     .slice()
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
     .map((item) => {
+      const effectiveActive = isClientAccessTokenActive(item)
+      if (item.active && !effectiveActive) {
+        item.active = false
+        if (!item.revokedAt) {
+          item.revokedAt = nowIso
+        }
+        shouldPersist = true
+      }
+
       const client = usersStore.find((candidate) => candidate.id === item.clientUserId)
       return {
         id: item.id,
@@ -613,11 +628,15 @@ app.get('/api/admin/client-access-tokens', (request, response) => {
           : {}),
         token: item.token,
         expiresAt: item.expiresAt,
-        active: item.active,
+        active: effectiveActive,
         createdAt: item.createdAt,
         ...(item.revokedAt ? { revokedAt: item.revokedAt } : {}),
       }
     })
+
+  if (shouldPersist) {
+    persistLocalData()
+  }
 
   response.json({ data })
 })
@@ -963,7 +982,46 @@ const ensurePublicEngagement = (clientId: string) => {
   return entry
 }
 
-app.get('/api/public/client/:clientId/leagues', (request, response) => {
+app.get('/api/public/clients', async (_request, response) => {
+  await refreshStoresFromMongoSnapshot()
+
+  const data = usersStore
+    .filter((user) => user.active && user.role === 'client_admin')
+    .map((user) => {
+      const leagues = leaguesStore
+        .filter((league) => league.ownerUserId === user.id && league.active)
+        .map((league) => ({
+          id: league.id,
+          name: league.name,
+          slug: league.slug,
+          country: league.country,
+          season: league.season,
+          themeColor: league.themeColor,
+          backgroundImageUrl: league.backgroundImageUrl,
+          logoUrl: league.logoUrl,
+          categories: league.categories.map((category) => ({
+            id: category.id,
+            name: category.name,
+          })),
+        }))
+
+      return {
+        id: user.id,
+        name: user.name,
+        ...(user.organizationName ? { organizationName: user.organizationName } : {}),
+        publicRouteAlias: buildPublicClientAlias(user),
+        publicPortalPath: buildPublicClientPath(user),
+        leagues,
+      }
+    })
+    .filter((user) => user.leagues.length > 0)
+
+  response.json({ data })
+})
+
+app.get('/api/public/client/:clientId/leagues', async (request, response) => {
+  await refreshStoresFromMongoSnapshot()
+
   const clientId = resolvePublicClientId(request.params.clientId ?? '')
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' })
@@ -1127,7 +1185,9 @@ app.post('/api/public/client/:clientId/matches/:matchId/engagement', (request, r
   })
 })
 
-app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', (request, response) => {
+app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request, response) => {
+  await refreshStoresFromMongoSnapshot()
+
   const clientId = resolvePublicClientId(request.params.clientId ?? '')
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' })
