@@ -2703,6 +2703,42 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
   }
 })
 
+app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId', (request, response) => {
+  const user = requireAuth(request, response)
+  if (!user) return
+
+  const league = leaguesStore.find((item) => item.id === request.params.leagueId)
+  if (!league) {
+    response.status(404).json({ message: 'Liga no encontrada' })
+    return
+  }
+
+  if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
+    response.status(403).json({ message: 'No tienes acceso a esta liga' })
+    return
+  }
+
+  const categoryId = String(request.query.categoryId ?? '')
+  const match = playedMatchesStore.find(
+    (item) => item.leagueId === league.id && item.categoryId === categoryId && item.matchId === request.params.matchId,
+  )
+
+  if (!match) {
+    response.status(404).json({ message: 'Partido jugado no encontrado' })
+    return
+  }
+
+  const videoIdx = match.highlightVideos.findIndex((v) => v.id === request.params.videoId)
+  if (videoIdx === -1) {
+    response.status(404).json({ message: 'Video no encontrado' })
+    return
+  }
+
+  match.highlightVideos.splice(videoIdx, 1)
+  persistLocalData()
+  response.json({ data: match })
+})
+
 app.get('/api/public/videos/:videoId', async (request, response) => {
   const bucket = await getVideosBucket()
   if (!bucket) {
