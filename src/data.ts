@@ -79,6 +79,7 @@ export interface RegisteredTeam {
   leagueId: string
   categoryId: string
   name: string
+  active?: boolean
   logoUrl?: string
   primaryColor?: string
   secondaryColor?: string

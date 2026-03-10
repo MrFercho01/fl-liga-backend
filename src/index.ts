@@ -5,9 +5,14 @@ import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import multer from 'multer'
 import { Readable } from 'node:stream'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { Server } from 'socket.io'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
+import ffmpegPath from 'ffmpeg-static'
 import {
   auditLogsStore,
   clientAccessTokensStore,
@@ -136,6 +141,60 @@ const upload = multer({
     fileSize: 12 * 1024 * 1024,
   },
 })
+
+const transcodeVideoIfPossible = async (buffer: Buffer) => {
+  const binary = ffmpegPath || process.env.FFMPEG_PATH || ''
+  if (!binary) {
+    return { buffer, mimetype: 'video/mp4', transcoded: false }
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'fl-liga-video-'))
+  const inputPath = path.join(tempDir, 'input.bin')
+  const outputPath = path.join(tempDir, 'output.mp4')
+
+  try {
+    await fs.writeFile(inputPath, buffer)
+
+    await new Promise<void>((resolve, reject) => {
+      const process = spawn(binary, [
+        '-y',
+        '-i',
+        inputPath,
+        '-vf',
+        'scale=w=854:h=480:force_original_aspect_ratio=decrease',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '30',
+        '-movflags',
+        '+faststart',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '96k',
+        outputPath,
+      ])
+
+      process.once('error', reject)
+      process.once('close', (code) => {
+        if (code === 0) {
+          resolve()
+          return
+        }
+        reject(new Error(`ffmpeg exit code ${String(code)}`))
+      })
+    })
+
+    const output = await fs.readFile(outputPath)
+    return { buffer: output, mimetype: 'video/mp4', transcoded: true }
+  } catch {
+    return { buffer, mimetype: 'video/mp4', transcoded: false }
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true })
+  }
+}
 
 const loginSchema = z.object({
   identifier: z.string().min(2),
@@ -1170,6 +1229,46 @@ const publicMatchLikeUpdateSchema = z.object({
   delta: z.number().int().min(-1).max(1),
 })
 
+const parseMatchIdentity = (matchId: string) => {
+  if (matchId.startsWith('manual__')) {
+    const [prefix, rawRound, homeTeamId, awayTeamId] = matchId.split('__')
+    const parsedRound = Number(rawRound)
+    if (prefix === 'manual' && Number.isFinite(parsedRound) && homeTeamId && awayTeamId) {
+      return { round: parsedRound, homeTeamId, awayTeamId }
+    }
+  }
+
+  if (matchId.startsWith('manual-')) {
+    const parsed = matchId.replace('manual-', '')
+    const firstDash = parsed.indexOf('-')
+    if (firstDash > 0) {
+      const parsedRound = Number(parsed.slice(0, firstDash))
+      const ids = parsed.slice(firstDash + 1).split('-')
+      if (Number.isFinite(parsedRound) && ids.length >= 10) {
+        const homeTeamId = ids.slice(0, 5).join('-')
+        const awayTeamId = ids.slice(5).join('-')
+        if (homeTeamId && awayTeamId) {
+          return { round: parsedRound, homeTeamId, awayTeamId }
+        }
+      }
+    }
+  }
+
+  const parts = matchId.split('-')
+  if (parts.length === 12) {
+    const parsedRound = Number(parts[0])
+    const homeTeamId = parts.slice(2, 7).join('-')
+    const awayTeamId = parts.slice(7, 12).join('-')
+    if (Number.isFinite(parsedRound) && homeTeamId.length === 36 && awayTeamId.length === 36) {
+      return { round: parsedRound, homeTeamId, awayTeamId }
+    }
+  }
+
+  return null
+}
+
+const isTeamActive = (team: { active?: boolean }) => team.active !== false
+
 app.post('/api/public/client/:clientId/matches/:matchId/engagement', (request, response) => {
   const clientId = resolvePublicClientId(request.params.clientId ?? '')
   if (!clientId) {
@@ -1218,7 +1317,11 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request
     return
   }
 
-  const categoryTeams = teamsStore.filter((team) => team.leagueId === league.id && team.categoryId === categoryId)
+  const categoryTeams = teamsStore.filter(
+    (team) => team.leagueId === league.id && team.categoryId === categoryId && isTeamActive(team),
+  )
+  const activeTeamIds = new Set(categoryTeams.map((team) => team.id))
+  const activeTeamNameKeys = new Set(categoryTeams.map((team) => normalizeTeamLabel(team.name)))
   const rounds = generateFixture(categoryTeams)
   const playerMetaById = new Map<string, { name: string; photoUrl?: string; teamName: string }>()
   categoryTeams.forEach((team) => {
@@ -1239,14 +1342,22 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request
     technicalStaff: team.technicalStaff,
     players: team.players,
   }))
-  const schedule = fixtureScheduleStore.filter(
-    (entry) => entry.leagueId === league.id && entry.categoryId === categoryId,
-  )
-  const playedMatchIds = playedMatchesStore
-    .filter((item) => item.leagueId === league.id && item.categoryId === categoryId)
-    .map((item) => item.matchId)
-  const playedMatches = playedMatchesStore
-    .filter((item) => item.leagueId === league.id && item.categoryId === categoryId)
+  const schedule = fixtureScheduleStore.filter((entry) => {
+    if (entry.leagueId !== league.id || entry.categoryId !== categoryId) return false
+    const parsed = parseMatchIdentity(entry.matchId)
+    if (!parsed) return true
+    return activeTeamIds.has(parsed.homeTeamId) && activeTeamIds.has(parsed.awayTeamId)
+  })
+
+  const playedMatchesBase = playedMatchesStore.filter((item) => {
+    if (item.leagueId !== league.id || item.categoryId !== categoryId) return false
+    const homeActive = activeTeamNameKeys.has(normalizeTeamLabel(item.homeTeamName))
+    const awayActive = activeTeamNameKeys.has(normalizeTeamLabel(item.awayTeamName))
+    return homeActive && awayActive
+  })
+
+  const playedMatchIds = playedMatchesBase.map((item) => item.matchId)
+  const playedMatches = playedMatchesBase
     .map((item) => {
       const mvpPlayer = item.playerOfMatchId ? playerMetaById.get(item.playerOfMatchId) : null
 
@@ -1485,6 +1596,7 @@ app.get('/api/admin/leagues/:leagueId/teams', (request, response) => {
 const createTeamSchema = z.object({
   name: z.string().min(2),
   categoryId: z.string().uuid(),
+  active: z.boolean().optional(),
   logoUrl: z.string().trim().min(1).optional(),
   primaryColor: z.string().trim().min(1).optional(),
   secondaryColor: z.string().trim().min(1).optional(),
@@ -1581,6 +1693,7 @@ app.post('/api/admin/leagues/:leagueId/teams', (request, response) => {
     leagueId: league.id,
     categoryId: parsed.data.categoryId,
     name: parsed.data.name.trim(),
+    active: parsed.data.active ?? true,
     ...(parsed.data.logoUrl ? { logoUrl: parsed.data.logoUrl } : {}),
     ...(parsed.data.primaryColor ? { primaryColor: parsed.data.primaryColor } : {}),
     ...(parsed.data.secondaryColor ? { secondaryColor: parsed.data.secondaryColor } : {}),
@@ -1680,6 +1793,7 @@ app.post('/api/admin/teams/:teamId/players', (request, response) => {
 const updateTeamSchema = z.object({
   name: z.string().min(2).optional(),
   categoryId: z.string().uuid().optional(),
+  active: z.boolean().optional(),
   logoUrl: z.string().trim().min(1).optional(),
   primaryColor: z.string().trim().min(1).optional(),
   secondaryColor: z.string().trim().min(1).optional(),
@@ -1754,6 +1868,9 @@ app.patch('/api/admin/teams/:teamId', (request, response) => {
 
   team.name = parsed.data.name?.trim() ?? team.name
   team.categoryId = parsed.data.categoryId ?? team.categoryId
+  if (parsed.data.active !== undefined) {
+    team.active = parsed.data.active
+  }
   if (parsed.data.logoUrl !== undefined) {
     team.logoUrl = parsed.data.logoUrl
   }
@@ -1926,7 +2043,9 @@ app.get('/api/admin/leagues/:leagueId/fixture', (request, response) => {
     return
   }
 
-  const teams = teamsStore.filter((team) => team.leagueId === league.id && team.categoryId === categoryId)
+  const teams = teamsStore.filter(
+    (team) => team.leagueId === league.id && team.categoryId === categoryId && isTeamActive(team),
+  )
   const rounds = generateFixture(teams)
 
   response.json({
@@ -1954,9 +2073,18 @@ app.get('/api/admin/leagues/:leagueId/fixture-schedule', (request, response) => 
   }
 
   const categoryId = typeof request.query.categoryId === 'string' ? request.query.categoryId : ''
-  const data = fixtureScheduleStore.filter(
-    (item) => item.leagueId === league.id && (!categoryId || item.categoryId === categoryId),
+  const activeTeamIds = new Set(
+    teamsStore
+      .filter((team) => team.leagueId === league.id && (!categoryId || team.categoryId === categoryId) && isTeamActive(team))
+      .map((team) => team.id),
   )
+
+  const data = fixtureScheduleStore.filter((item) => {
+    if (item.leagueId !== league.id || (categoryId && item.categoryId !== categoryId)) return false
+    const parsed = parseMatchIdentity(item.matchId)
+    if (!parsed) return true
+    return activeTeamIds.has(parsed.homeTeamId) && activeTeamIds.has(parsed.awayTeamId)
+  })
   response.json({ data })
 })
 
@@ -2220,9 +2348,18 @@ app.get('/api/admin/leagues/:leagueId/played-matches', (request, response) => {
   }
 
   const categoryId = typeof request.query.categoryId === 'string' ? request.query.categoryId : ''
-  const data = playedMatchesStore.filter(
-    (item) => item.leagueId === league.id && (!categoryId || item.categoryId === categoryId),
+  const activeNameKeys = new Set(
+    teamsStore
+      .filter((team) => team.leagueId === league.id && (!categoryId || team.categoryId === categoryId) && isTeamActive(team))
+      .map((team) => normalizeTeamLabel(team.name)),
   )
+
+  const data = playedMatchesStore.filter((item) => {
+    if (item.leagueId !== league.id || (categoryId && item.categoryId !== categoryId)) return false
+    const homeActive = activeNameKeys.has(normalizeTeamLabel(item.homeTeamName))
+    const awayActive = activeNameKeys.has(normalizeTeamLabel(item.awayTeamName))
+    return homeActive && awayActive
+  })
   response.json({ data })
 })
 
@@ -2524,9 +2661,14 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
   const safeName = parsed.data.name?.trim() || file.originalname || `video-${Date.now()}.mp4`
 
   try {
-    const uploadStream = bucket.openUploadStream(safeName, {
+    const optimized = await transcodeVideoIfPossible(file.buffer)
+    const finalName = optimized.transcoded
+      ? safeName.replace(/\.[^.]+$/, '').concat('.mp4')
+      : safeName
+
+    const uploadStream = bucket.openUploadStream(finalName, {
       metadata: {
-        contentType: file.mimetype,
+        contentType: optimized.mimetype,
         leagueId: league.id,
         categoryId: parsed.data.categoryId,
         matchId: match.matchId,
@@ -2535,7 +2677,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
     })
 
     await new Promise<void>((resolve, reject) => {
-      Readable.from(file.buffer)
+      Readable.from(optimized.buffer)
         .pipe(uploadStream)
         .on('error', reject)
         .on('finish', () => resolve())
@@ -2549,7 +2691,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
 
     const video = {
       id: uuidv4(),
-      name: safeName,
+      name: finalName,
       url: buildPublicVideoUrl(request, fileId),
     }
 
