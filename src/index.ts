@@ -1223,6 +1223,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request
     id: team.id,
     name: team.name,
     logoUrl: team.logoUrl,
+    primaryColor: team.primaryColor,
+    secondaryColor: team.secondaryColor,
     technicalStaff: team.technicalStaff,
     players: team.players,
   }))
