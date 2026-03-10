@@ -1668,6 +1668,8 @@ const updateTeamSchema = z.object({
   name: z.string().min(2).optional(),
   categoryId: z.string().uuid().optional(),
   logoUrl: z.string().trim().min(1).optional(),
+  primaryColor: z.string().trim().min(1).optional(),
+  secondaryColor: z.string().trim().min(1).optional(),
   technicalStaff: z
     .object({
       director: z
@@ -1741,6 +1743,12 @@ app.patch('/api/admin/teams/:teamId', (request, response) => {
   team.categoryId = parsed.data.categoryId ?? team.categoryId
   if (parsed.data.logoUrl !== undefined) {
     team.logoUrl = parsed.data.logoUrl
+  }
+  if (parsed.data.primaryColor !== undefined) {
+    team.primaryColor = parsed.data.primaryColor
+  }
+  if (parsed.data.secondaryColor !== undefined) {
+    team.secondaryColor = parsed.data.secondaryColor
   }
   if (parsed.data.technicalStaff !== undefined) {
     const normalizedStaff = normalizeTechnicalStaff(parsed.data.technicalStaff)
