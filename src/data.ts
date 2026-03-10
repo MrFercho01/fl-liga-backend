@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { MongoClient, type Collection } from 'mongodb'
+import { GridFSBucket, MongoClient, ObjectId, type Collection, type Db } from 'mongodb'
 
 export interface RuleSet {
   playersOnField: number
@@ -295,7 +295,9 @@ const mongoCollectionName = process.env.MONGODB_COLLECTION_NAME?.trim() || 'app_
 const mongoStateDocumentId = process.env.MONGODB_STATE_DOCUMENT_ID?.trim() || 'main'
 
 let mongoClient: MongoClient | null = null
+let mongoDb: Db | null = null
 let mongoCollection: Collection<MongoSnapshotDocument> | null = null
+let videosBucket: GridFSBucket | null = null
 let persistQueue: Promise<void> = Promise.resolve()
 
 export const usersStore: AppUser[] = [
@@ -473,8 +475,23 @@ const connectMongo = async () => {
   mongoClient = new MongoClient(mongoUri)
   await mongoClient.connect()
   const db = mongoClient.db(mongoDbName)
+  mongoDb = db
+  videosBucket = new GridFSBucket(db, { bucketName: 'highlight_videos' })
   mongoCollection = db.collection<MongoSnapshotDocument>(mongoCollectionName)
   return mongoCollection
+}
+
+export const getVideosBucket = async (): Promise<GridFSBucket | null> => {
+  await connectMongo()
+  return videosBucket
+}
+
+export const getMongoObjectId = (id: string) => {
+  try {
+    return new ObjectId(id)
+  } catch {
+    return null
+  }
 }
 
 const readMongoSnapshot = async () => {

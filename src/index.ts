@@ -3,6 +3,8 @@ import cors from 'cors'
 import express from 'express'
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import multer from 'multer'
+import { Readable } from 'node:stream'
 import { Server } from 'socket.io'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
@@ -12,6 +14,8 @@ import {
   ensureOperationalSeedData,
   fixtureScheduleStore,
   flushPersistQueue,
+  getMongoObjectId,
+  getVideosBucket,
   initializeDataStore,
   leaguesStore,
   persistLocalData,
@@ -125,6 +129,13 @@ app.use(
   }),
 )
 app.use(express.json({ limit: '12mb' }))
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 12 * 1024 * 1024,
+  },
+})
 
 const loginSchema = z.object({
   identifier: z.string().min(2),
@@ -2406,6 +2417,20 @@ const addVideoSchema = z.object({
   url: z.string().min(10),
 })
 
+const uploadVideoSchema = z.object({
+  categoryId: z.string().uuid(),
+  name: z.string().trim().min(1).optional(),
+})
+
+const buildPublicVideoUrl = (request: express.Request, videoId: string) => {
+  const configured = process.env.PUBLIC_API_BASE_URL?.trim()
+  if (configured) {
+    return `${configured.replace(/\/$/, '')}/api/public/videos/${videoId}`
+  }
+
+  return `${request.protocol}://${request.get('host')}/api/public/videos/${videoId}`
+}
+
 app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', (request, response) => {
   const user = requireAuth(request, response)
   if (!user) return
@@ -2445,6 +2470,148 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', (request
   match.highlightVideos.push(video)
   persistLocalData()
   response.json({ data: match })
+})
+
+app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', upload.single('video'), async (request, response) => {
+  const user = requireAuth(request, response)
+  if (!user) return
+
+  const league = leaguesStore.find((item) => item.id === request.params.leagueId)
+  if (!league) {
+    response.status(404).json({ message: 'Liga no encontrada' })
+    return
+  }
+
+  if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
+    response.status(403).json({ message: 'No tienes acceso a esta liga' })
+    return
+  }
+
+  const parsed = uploadVideoSchema.safeParse(request.body)
+  if (!parsed.success) {
+    response.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() })
+    return
+  }
+
+  const file = request.file
+  if (!file) {
+    response.status(400).json({ message: 'Debes adjuntar un archivo de video' })
+    return
+  }
+
+  if (!file.mimetype.startsWith('video/')) {
+    response.status(400).json({ message: 'El archivo debe ser un video válido' })
+    return
+  }
+
+  const match = playedMatchesStore.find(
+    (item) => item.leagueId === league.id && item.categoryId === parsed.data.categoryId && item.matchId === request.params.matchId,
+  )
+
+  if (!match) {
+    response.status(404).json({ message: 'Partido jugado no encontrado' })
+    return
+  }
+
+  const bucket = await getVideosBucket()
+  if (!bucket) {
+    response.status(503).json({
+      message: 'Upload de videos requiere MongoDB activo. Configura MONGODB_URI en backend.',
+    })
+    return
+  }
+
+  const safeName = parsed.data.name?.trim() || file.originalname || `video-${Date.now()}.mp4`
+
+  try {
+    const uploadStream = bucket.openUploadStream(safeName, {
+      metadata: {
+        contentType: file.mimetype,
+        leagueId: league.id,
+        categoryId: parsed.data.categoryId,
+        matchId: match.matchId,
+        uploadedBy: user.id,
+      },
+    })
+
+    await new Promise<void>((resolve, reject) => {
+      Readable.from(file.buffer)
+        .pipe(uploadStream)
+        .on('error', reject)
+        .on('finish', () => resolve())
+    })
+
+    const fileId = uploadStream.id?.toString() ?? ''
+    if (!fileId) {
+      response.status(500).json({ message: 'No se pudo generar identificador de video' })
+      return
+    }
+
+    const video = {
+      id: uuidv4(),
+      name: safeName,
+      url: buildPublicVideoUrl(request, fileId),
+    }
+
+    match.highlightVideos.push(video)
+    persistLocalData()
+    response.json({ data: match })
+  } catch {
+    response.status(500).json({ message: 'No se pudo procesar/cargar el video' })
+  }
+})
+
+app.get('/api/public/videos/:videoId', async (request, response) => {
+  const bucket = await getVideosBucket()
+  if (!bucket) {
+    response.status(404).json({ message: 'Video no disponible' })
+    return
+  }
+
+  const fileId = getMongoObjectId(request.params.videoId)
+  if (!fileId) {
+    response.status(400).json({ message: 'ID de video inválido' })
+    return
+  }
+
+  try {
+    const fileDoc = await bucket.find({ _id: fileId }).next()
+    if (!fileDoc) {
+      response.status(404).json({ message: 'Video no encontrado' })
+      return
+    }
+
+    const totalSize = Number(fileDoc.length ?? 0)
+    const contentType = ((fileDoc.metadata as { contentType?: string } | undefined)?.contentType) || 'video/mp4'
+    const range = request.headers.range
+
+    response.setHeader('Accept-Ranges', 'bytes')
+    response.setHeader('Cache-Control', 'public, max-age=3600')
+    response.setHeader('Content-Type', contentType)
+
+    if (range && totalSize > 0) {
+      const [startText = '', endText = ''] = range.replace(/bytes=/, '').split('-')
+      const start = Number.parseInt(startText, 10)
+      const end = endText ? Number.parseInt(endText, 10) : totalSize - 1
+
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end >= totalSize || start > end) {
+        response.status(416).setHeader('Content-Range', `bytes */${totalSize}`).end()
+        return
+      }
+
+      response.status(206)
+      response.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`)
+      response.setHeader('Content-Length', String(end - start + 1))
+
+      bucket.openDownloadStream(fileId, { start, end: end + 1 }).pipe(response)
+      return
+    }
+
+    response.setHeader('Content-Length', String(totalSize))
+    bucket.openDownloadStream(fileId).pipe(response)
+  } catch {
+    response.status(500).json({ message: 'No se pudo transmitir el video' })
+  }
 })
 
 const loadLiveMatchSchema = z.object({
