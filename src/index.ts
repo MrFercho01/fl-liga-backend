@@ -1380,13 +1380,23 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request
     technicalStaff: team.technicalStaff,
     players: team.players,
   }))
-  const schedule = fixtureScheduleStore.filter((entry) => {
-    if (entry.leagueId !== league.id || entry.categoryId !== categoryId) return false
-    const parsed = parseMatchIdentity(entry.matchId)
-    if (!parsed) return true
-    if (activeTeamIds.has(parsed.homeTeamId) && activeTeamIds.has(parsed.awayTeamId)) return true
-    return playedMatchIdSet.has(entry.matchId)
-  })
+  const schedule = fixtureScheduleStore
+    .filter((entry) => {
+      if (entry.leagueId !== league.id || entry.categoryId !== categoryId) return false
+      const parsed = parseMatchIdentity(entry.matchId)
+      if (!parsed) return true
+      if (activeTeamIds.has(parsed.homeTeamId) && activeTeamIds.has(parsed.awayTeamId)) return true
+      return playedMatchIdSet.has(entry.matchId)
+    })
+    .map((entry) => ({
+      leagueId: entry.leagueId,
+      categoryId: entry.categoryId,
+      matchId: entry.matchId,
+      round: entry.round,
+      scheduledAt: entry.scheduledAt,
+      ...(entry.venue ? { venue: entry.venue } : {}),
+      ...(entry.status ? { status: entry.status } : {}),
+    }))
 
   const playedMatchesBase = playedMatchesStore.filter((item) => {
     if (item.leagueId !== league.id || item.categoryId !== categoryId) return false
