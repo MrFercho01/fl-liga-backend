@@ -647,7 +647,7 @@ const ensureRoundOneAustroVsPacificoFromPlayed = () => {
     return direct || reverse
   })
 
-  const playedAt = '2026-03-07T17:30:00-05:00'
+  const playedAt = '2026-03-07T16:00:00-05:00'
   let changed = false
 
   if (existingIndex >= 0) {
