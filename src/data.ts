@@ -204,6 +204,7 @@ export interface FixtureScheduleEntry {
   round: number
   scheduledAt: string
   venue?: string
+  status?: 'scheduled' | 'postponed'
 }
 
 export interface RoundMatchBestPlayer {
@@ -561,7 +562,109 @@ const ensureSeedData = () => {
     fixtureScheduleStore.push(...seedFixtureSchedule)
   }
 }
+const normalizeFixtureTeamName = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\bbanco\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
 
+const ensureRoundOnePostponedProdubancoVsSolidario = () => {
+  const produbanco = teamsStore.find((team) => normalizeFixtureTeamName(team.name).includes('produbanco'))
+  const solidario = teamsStore.find(
+    (team) =>
+      team.leagueId === produbanco?.leagueId &&
+      team.categoryId === produbanco?.categoryId &&
+      normalizeFixtureTeamName(team.name).includes('solidario'),
+  )
+
+  if (!produbanco || !solidario) return false
+
+  const pairMatch = fixtureScheduleStore.find(
+    (entry) =>
+      entry.leagueId === produbanco.leagueId &&
+      entry.categoryId === produbanco.categoryId &&
+      entry.round === 1 &&
+      (entry.matchId === `manual__1__${produbanco.id}__${solidario.id}` ||
+        entry.matchId === `manual__1__${solidario.id}__${produbanco.id}`),
+  )
+
+  const postponedIsoDate = '2026-03-07T05:30:00-05:00'
+
+  if (pairMatch) {
+    let changed = false
+    if (pairMatch.status !== 'postponed') {
+      pairMatch.status = 'postponed'
+      changed = true
+    }
+    if ((pairMatch.scheduledAt ?? '') !== postponedIsoDate) {
+      pairMatch.scheduledAt = postponedIsoDate
+      changed = true
+    }
+    if (!pairMatch.venue?.trim()) {
+      pairMatch.venue = 'Partido postergado'
+      changed = true
+    }
+    return changed
+  }
+
+  fixtureScheduleStore.push({
+    leagueId: produbanco.leagueId,
+    categoryId: produbanco.categoryId,
+    matchId: `manual__1__${produbanco.id}__${solidario.id}`,
+    round: 1,
+    scheduledAt: postponedIsoDate,
+    venue: 'Partido postergado',
+    status: 'postponed',
+  })
+
+  return true
+}
+
+const ensureRoundOneAustroVsPacificoFromPlayed = () => {
+  const austro = teamsStore.find((team) => normalizeFixtureTeamName(team.name).includes('austro'))
+  const pacifico = teamsStore.find(
+    (team) =>
+      team.leagueId === austro?.leagueId &&
+      team.categoryId === austro?.categoryId &&
+      normalizeFixtureTeamName(team.name).includes('pacifico'),
+  )
+
+  if (!austro || !pacifico) return false
+
+  const played = playedMatchesStore.find((item) => {
+    if (item.leagueId !== austro.leagueId || item.categoryId !== austro.categoryId || item.round !== 1) return false
+    const home = normalizeFixtureTeamName(item.homeTeamName)
+    const away = normalizeFixtureTeamName(item.awayTeamName)
+    const direct = home.includes('austro') && away.includes('pacifico')
+    const reverse = home.includes('pacifico') && away.includes('austro')
+    return direct || reverse
+  })
+
+  if (!played) return false
+
+  const existing = fixtureScheduleStore.find(
+    (entry) =>
+      entry.leagueId === austro.leagueId &&
+      entry.categoryId === austro.categoryId &&
+      entry.round === 1 &&
+      entry.matchId === played.matchId,
+  )
+
+  if (existing) return false
+
+  fixtureScheduleStore.push({
+    leagueId: austro.leagueId,
+    categoryId: austro.categoryId,
+    matchId: played.matchId,
+    round: 1,
+    scheduledAt: played.playedAt,
+  })
+
+  return true
+}
 export const ensureOperationalSeedData = () => {
   const hadLeague = leaguesStore.some((league) => league.id === seedLeagueId)
   const hadTeams = teamsStore.some((team) => team.leagueId === seedLeagueId && team.categoryId === seedCategoryId)
@@ -582,8 +685,10 @@ export const ensureOperationalSeedData = () => {
   }
 
   ensureSeedData()
+  const injectedPostponedMatch = ensureRoundOnePostponedProdubancoVsSolidario()
+  const injectedAustroPacificoMatch = ensureRoundOneAustroVsPacificoFromPlayed()
 
-  if (!hadLeague || !hadTeams || !hadSchedule || !hasSuperAdmin) {
+  if (!hadLeague || !hadTeams || !hadSchedule || !hasSuperAdmin || injectedPostponedMatch || injectedAustroPacificoMatch) {
     persistLocalData()
   }
 }

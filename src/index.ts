@@ -939,6 +939,20 @@ const normalizeTeamLabel = (value: string) =>
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
 
+const buildTeamNameAliases = (value: string) => {
+  const normalized = normalizeTeamLabel(value).replace(/\s+/g, ' ').trim()
+  const withoutBanco = normalized.replace(/\bbanco\b/g, ' ').replace(/\s+/g, ' ').trim()
+  return Array.from(new Set([normalized, withoutBanco].filter(Boolean)))
+}
+
+const resolveTeamFromAliasMap = (map: Map<string, RegisteredTeam>, teamName: string) => {
+  for (const alias of buildTeamNameAliases(teamName)) {
+    const team = map.get(alias)
+    if (team) return team
+  }
+  return undefined
+}
+
 const findTeamByLeagueCategoryAndName = (leagueId: string, categoryId: string, teamName: string) => {
   const normalizedName = normalizeTeamLabel(teamName)
   return teamsStore.find(
@@ -1317,11 +1331,25 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request
     return
   }
 
-  const categoryTeams = teamsStore.filter(
-    (team) => team.leagueId === league.id && team.categoryId === categoryId && isTeamActive(team),
+  const allCategoryTeams = teamsStore.filter(
+    (team) => team.leagueId === league.id && team.categoryId === categoryId,
   )
+  const categoryTeams = allCategoryTeams.filter((team) => isTeamActive(team))
+  const allCategoryTeamIds = new Set(allCategoryTeams.map((team) => team.id))
   const activeTeamIds = new Set(categoryTeams.map((team) => team.id))
-  const activeTeamNameKeys = new Set(categoryTeams.map((team) => normalizeTeamLabel(team.name)))
+  const categoryTeamByName = new Map<string, RegisteredTeam>()
+  allCategoryTeams.forEach((team) => {
+    buildTeamNameAliases(team.name).forEach((alias) => {
+      if (!categoryTeamByName.has(alias)) {
+        categoryTeamByName.set(alias, team)
+      }
+    })
+  })
+  const playedMatchIdSet = new Set(
+    playedMatchesStore
+      .filter((item) => item.leagueId === league.id && item.categoryId === categoryId)
+      .map((item) => item.matchId),
+  )
   const rounds = generateFixture(categoryTeams)
   const playerMetaById = new Map<string, { name: string; photoUrl?: string; teamName: string }>()
   categoryTeams.forEach((team) => {
@@ -1346,14 +1374,22 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request
     if (entry.leagueId !== league.id || entry.categoryId !== categoryId) return false
     const parsed = parseMatchIdentity(entry.matchId)
     if (!parsed) return true
-    return activeTeamIds.has(parsed.homeTeamId) && activeTeamIds.has(parsed.awayTeamId)
+    if (activeTeamIds.has(parsed.homeTeamId) && activeTeamIds.has(parsed.awayTeamId)) return true
+    return playedMatchIdSet.has(entry.matchId)
   })
 
   const playedMatchesBase = playedMatchesStore.filter((item) => {
     if (item.leagueId !== league.id || item.categoryId !== categoryId) return false
-    const homeActive = activeTeamNameKeys.has(normalizeTeamLabel(item.homeTeamName))
-    const awayActive = activeTeamNameKeys.has(normalizeTeamLabel(item.awayTeamName))
-    return homeActive && awayActive
+
+    const parsed = parseMatchIdentity(item.matchId)
+    if (parsed) {
+      return allCategoryTeamIds.has(parsed.homeTeamId) && allCategoryTeamIds.has(parsed.awayTeamId)
+    }
+
+    const homeTeam = resolveTeamFromAliasMap(categoryTeamByName, item.homeTeamName)
+    const awayTeam = resolveTeamFromAliasMap(categoryTeamByName, item.awayTeamName)
+
+    return Boolean(homeTeam && awayTeam)
   })
 
   const playedMatchIds = playedMatchesBase.map((item) => item.matchId)
@@ -2093,6 +2129,7 @@ const setScheduleSchema = z.object({
   round: z.number().int().min(1),
   scheduledAt: z.string().min(4),
   venue: z.string().trim().min(1).max(120).optional(),
+  status: z.enum(['scheduled', 'postponed']).optional(),
 })
 
 app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', (request, response) => {
@@ -2130,6 +2167,7 @@ app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', (request, res
     round: parsed.data.round,
     scheduledAt: parsed.data.scheduledAt,
     ...(parsed.data.venue ? { venue: parsed.data.venue } : {}),
+    ...(parsed.data.status ? { status: parsed.data.status } : {}),
   }
 
   if (existingIndex === -1) {
@@ -2348,17 +2386,31 @@ app.get('/api/admin/leagues/:leagueId/played-matches', (request, response) => {
   }
 
   const categoryId = typeof request.query.categoryId === 'string' ? request.query.categoryId : ''
-  const activeNameKeys = new Set(
-    teamsStore
-      .filter((team) => team.leagueId === league.id && (!categoryId || team.categoryId === categoryId) && isTeamActive(team))
-      .map((team) => normalizeTeamLabel(team.name)),
+  const categoryTeams = teamsStore.filter(
+    (team) => team.leagueId === league.id && (!categoryId || team.categoryId === categoryId),
   )
+  const categoryTeamIds = new Set(categoryTeams.map((team) => team.id))
+  const categoryTeamByName = new Map<string, RegisteredTeam>()
+  categoryTeams.forEach((team) => {
+    buildTeamNameAliases(team.name).forEach((alias) => {
+      if (!categoryTeamByName.has(alias)) {
+        categoryTeamByName.set(alias, team)
+      }
+    })
+  })
 
   const data = playedMatchesStore.filter((item) => {
     if (item.leagueId !== league.id || (categoryId && item.categoryId !== categoryId)) return false
-    const homeActive = activeNameKeys.has(normalizeTeamLabel(item.homeTeamName))
-    const awayActive = activeNameKeys.has(normalizeTeamLabel(item.awayTeamName))
-    return homeActive && awayActive
+
+    const parsed = parseMatchIdentity(item.matchId)
+    if (parsed) {
+      return categoryTeamIds.has(parsed.homeTeamId) && categoryTeamIds.has(parsed.awayTeamId)
+    }
+
+    const homeTeam = resolveTeamFromAliasMap(categoryTeamByName, item.homeTeamName)
+    const awayTeam = resolveTeamFromAliasMap(categoryTeamByName, item.awayTeamName)
+
+    return Boolean(homeTeam && awayTeam)
   })
   response.json({ data })
 })
