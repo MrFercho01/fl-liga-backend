@@ -634,7 +634,11 @@ const ensureRoundOneAustroVsPacificoFromPlayed = () => {
 
   if (!austro || !pacifico) return false
 
-  const played = playedMatchesStore.find((item) => {
+  const canonicalMatchId = `manual__1__${austro.id}__${pacifico.id}`
+  const austroDisplayName = austro.name.includes('Banco') ? austro.name : `Banco ${austro.name}`
+  const pacificoDisplayName = pacifico.name.includes('Banco') ? pacifico.name : `Banco ${pacifico.name}`
+
+  const existingIndex = playedMatchesStore.findIndex((item) => {
     if (item.leagueId !== austro.leagueId || item.categoryId !== austro.categoryId || item.round !== 1) return false
     const home = normalizeFixtureTeamName(item.homeTeamName)
     const away = normalizeFixtureTeamName(item.awayTeamName)
@@ -643,27 +647,82 @@ const ensureRoundOneAustroVsPacificoFromPlayed = () => {
     return direct || reverse
   })
 
-  if (!played) return false
+  const playedAt = '2026-03-07T17:30:00-05:00'
+  let changed = false
 
-  const existing = fixtureScheduleStore.find(
+  if (existingIndex >= 0) {
+    const existing = playedMatchesStore[existingIndex]!
+    if (existing.matchId !== canonicalMatchId) {
+      existing.matchId = canonicalMatchId
+      changed = true
+    }
+    if (existing.homeTeamName !== austroDisplayName) {
+      existing.homeTeamName = austroDisplayName
+      changed = true
+    }
+    if (existing.awayTeamName !== pacificoDisplayName) {
+      existing.awayTeamName = pacificoDisplayName
+      changed = true
+    }
+    if (existing.homeStats.goals !== 0 || existing.awayStats.goals !== 2) {
+      existing.homeStats.goals = 0
+      existing.awayStats.goals = 2
+      changed = true
+    }
+    if ((existing.playedAt ?? '') !== playedAt) {
+      existing.playedAt = playedAt
+      changed = true
+    }
+  } else {
+    playedMatchesStore.push({
+      matchId: canonicalMatchId,
+      leagueId: austro.leagueId,
+      categoryId: austro.categoryId,
+      round: 1,
+      finalMinute: 30,
+      homeTeamName: austroDisplayName,
+      awayTeamName: pacificoDisplayName,
+      homeStats: { shots: 0, goals: 0, yellows: 0, reds: 0, assists: 0 },
+      awayStats: { shots: 0, goals: 2, yellows: 0, reds: 0, assists: 0 },
+      players: [],
+      goals: [],
+      events: [],
+      highlightVideos: [],
+      playedAt,
+    })
+    changed = true
+  }
+
+  const scheduleIndex = fixtureScheduleStore.findIndex(
     (entry) =>
       entry.leagueId === austro.leagueId &&
       entry.categoryId === austro.categoryId &&
       entry.round === 1 &&
-      entry.matchId === played.matchId,
+      (entry.matchId === canonicalMatchId || entry.matchId === `manual__1__${pacifico.id}__${austro.id}`),
   )
 
-  if (existing) return false
+  if (scheduleIndex >= 0) {
+    const scheduled = fixtureScheduleStore[scheduleIndex]!
+    if (scheduled.matchId !== canonicalMatchId) {
+      scheduled.matchId = canonicalMatchId
+      changed = true
+    }
+    if ((scheduled.scheduledAt ?? '') !== playedAt) {
+      scheduled.scheduledAt = playedAt
+      changed = true
+    }
+  } else {
+    fixtureScheduleStore.push({
+      leagueId: austro.leagueId,
+      categoryId: austro.categoryId,
+      matchId: canonicalMatchId,
+      round: 1,
+      scheduledAt: playedAt,
+    })
+    changed = true
+  }
 
-  fixtureScheduleStore.push({
-    leagueId: austro.leagueId,
-    categoryId: austro.categoryId,
-    matchId: played.matchId,
-    round: 1,
-    scheduledAt: played.playedAt,
-  })
-
-  return true
+  return changed
 }
 export const ensureOperationalSeedData = () => {
   const hadLeague = leaguesStore.some((league) => league.id === seedLeagueId)
