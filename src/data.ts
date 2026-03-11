@@ -571,6 +571,197 @@ const normalizeFixtureTeamName = (value: string) =>
     .trim()
     .toLowerCase()
 
+const withBancoPrefix = (value: string) => (normalizeFixtureTeamName(value).includes('banco') ? value : `Banco ${value}`)
+
+const buildGoalTimeline = (homeGoals: number, awayGoals: number, homeTeamName: string, awayTeamName: string) => {
+  const defaultMinutes = [4, 8, 12, 16, 20, 24, 27, 30]
+  const goals: MatchGoal[] = []
+  const events: PlayedMatchRecord['events'] = []
+
+  for (let index = 0; index < homeGoals; index += 1) {
+    const minute = defaultMinutes[index] ?? (31 + index)
+    const clock = `${minute}'`
+    const playerName = `Gol ${index + 1}`
+    goals.push({ minute, clock, teamName: homeTeamName, playerName })
+    events.push({ clock, type: 'goal', teamName: homeTeamName, playerName })
+  }
+
+  for (let index = 0; index < awayGoals; index += 1) {
+    const minute = defaultMinutes[index] ?? (31 + index)
+    const clock = `${minute}'`
+    const playerName = `Gol ${index + 1}`
+    goals.push({ minute, clock, teamName: awayTeamName, playerName })
+    events.push({ clock, type: 'goal', teamName: awayTeamName, playerName })
+  }
+
+  goals.sort((left, right) => left.minute - right.minute)
+  events.sort((left, right) => Number(left.clock.replace("'", '')) - Number(right.clock.replace("'", '')))
+
+  return { goals, events }
+}
+
+const ensureRoundOneFinishedMatch = ({
+  homeTeamKeyword,
+  awayTeamKeyword,
+  homeGoals,
+  awayGoals,
+  playedAt,
+}: {
+  homeTeamKeyword: string
+  awayTeamKeyword: string
+  homeGoals: number
+  awayGoals: number
+  playedAt: string
+}) => {
+  const homeTeam = teamsStore.find((team) => normalizeFixtureTeamName(team.name).includes(homeTeamKeyword))
+  const awayTeam = teamsStore.find(
+    (team) =>
+      team.leagueId === homeTeam?.leagueId &&
+      team.categoryId === homeTeam?.categoryId &&
+      normalizeFixtureTeamName(team.name).includes(awayTeamKeyword),
+  )
+
+  if (!homeTeam || !awayTeam) return false
+
+  const canonicalMatchId = `manual__1__${homeTeam.id}__${awayTeam.id}`
+  const homeDisplayName = withBancoPrefix(homeTeam.name)
+  const awayDisplayName = withBancoPrefix(awayTeam.name)
+
+  const matchedPlayedIndexes: number[] = []
+  playedMatchesStore.forEach((item, index) => {
+    if (item.leagueId !== homeTeam.leagueId || item.categoryId !== homeTeam.categoryId || item.round !== 1) return
+    const normalizedHome = normalizeFixtureTeamName(item.homeTeamName)
+    const normalizedAway = normalizeFixtureTeamName(item.awayTeamName)
+    const direct = normalizedHome.includes(homeTeamKeyword) && normalizedAway.includes(awayTeamKeyword)
+    const reverse = normalizedHome.includes(awayTeamKeyword) && normalizedAway.includes(homeTeamKeyword)
+    if (direct || reverse) {
+      matchedPlayedIndexes.push(index)
+    }
+  })
+
+  let changed = false
+
+  let record: PlayedMatchRecord
+  if (matchedPlayedIndexes.length > 0) {
+    const primaryIndex = matchedPlayedIndexes[0]!
+    record = playedMatchesStore[primaryIndex]!
+
+    for (let index = matchedPlayedIndexes.length - 1; index >= 1; index -= 1) {
+      const removeIndex = matchedPlayedIndexes[index]!
+      playedMatchesStore.splice(removeIndex, 1)
+      changed = true
+    }
+  } else {
+    record = {
+      matchId: canonicalMatchId,
+      leagueId: homeTeam.leagueId,
+      categoryId: homeTeam.categoryId,
+      round: 1,
+      finalMinute: 30,
+      homeTeamName: homeDisplayName,
+      awayTeamName: awayDisplayName,
+      homeStats: { shots: 0, goals: homeGoals, yellows: 0, reds: 0, assists: 0 },
+      awayStats: { shots: 0, goals: awayGoals, yellows: 0, reds: 0, assists: 0 },
+      players: [],
+      goals: [],
+      events: [],
+      highlightVideos: [],
+      playedAt,
+    }
+    playedMatchesStore.push(record)
+    changed = true
+  }
+
+  if (record.matchId !== canonicalMatchId) {
+    record.matchId = canonicalMatchId
+    changed = true
+  }
+  if (record.homeTeamName !== homeDisplayName) {
+    record.homeTeamName = homeDisplayName
+    changed = true
+  }
+  if (record.awayTeamName !== awayDisplayName) {
+    record.awayTeamName = awayDisplayName
+    changed = true
+  }
+  if (record.round !== 1) {
+    record.round = 1
+    changed = true
+  }
+  if (record.finalMinute !== 30) {
+    record.finalMinute = 30
+    changed = true
+  }
+  if (record.homeStats.goals !== homeGoals || record.awayStats.goals !== awayGoals) {
+    record.homeStats.goals = homeGoals
+    record.awayStats.goals = awayGoals
+    changed = true
+  }
+  if ((record.playedAt ?? '') !== playedAt) {
+    record.playedAt = playedAt
+    changed = true
+  }
+
+  const goalEvents = record.events.filter((event) => event.type === 'goal' || event.type === 'penalty_goal')
+  const expectedGoals = homeGoals + awayGoals
+  if (goalEvents.length < expectedGoals || record.goals.length < expectedGoals) {
+    const timeline = buildGoalTimeline(homeGoals, awayGoals, homeDisplayName, awayDisplayName)
+    record.goals = timeline.goals
+    record.events = timeline.events
+    changed = true
+  }
+
+  const matchedScheduleIndexes: number[] = []
+  fixtureScheduleStore.forEach((entry, index) => {
+    if (entry.leagueId !== homeTeam.leagueId || entry.categoryId !== homeTeam.categoryId || entry.round !== 1) return
+    const normalizedMatchId = normalizeFixtureTeamName(entry.matchId)
+    const homeInId = normalizedMatchId.includes(homeTeam.id)
+    const awayInId = normalizedMatchId.includes(awayTeam.id)
+    const reverseInId = normalizedMatchId.includes(awayTeam.id) && normalizedMatchId.includes(homeTeam.id)
+    if ((homeInId && awayInId) || reverseInId) {
+      matchedScheduleIndexes.push(index)
+    }
+  })
+
+  let scheduleEntry: FixtureScheduleEntry
+  if (matchedScheduleIndexes.length > 0) {
+    const primaryIndex = matchedScheduleIndexes[0]!
+    scheduleEntry = fixtureScheduleStore[primaryIndex]!
+
+    for (let index = matchedScheduleIndexes.length - 1; index >= 1; index -= 1) {
+      const removeIndex = matchedScheduleIndexes[index]!
+      fixtureScheduleStore.splice(removeIndex, 1)
+      changed = true
+    }
+  } else {
+    scheduleEntry = {
+      leagueId: homeTeam.leagueId,
+      categoryId: homeTeam.categoryId,
+      matchId: canonicalMatchId,
+      round: 1,
+      scheduledAt: playedAt,
+      status: 'scheduled',
+    }
+    fixtureScheduleStore.push(scheduleEntry)
+    changed = true
+  }
+
+  if (scheduleEntry.matchId !== canonicalMatchId) {
+    scheduleEntry.matchId = canonicalMatchId
+    changed = true
+  }
+  if ((scheduleEntry.scheduledAt ?? '') !== playedAt) {
+    scheduleEntry.scheduledAt = playedAt
+    changed = true
+  }
+  if (scheduleEntry.status !== 'scheduled') {
+    scheduleEntry.status = 'scheduled'
+    changed = true
+  }
+
+  return changed
+}
+
 const ensureRoundOnePostponedProdubancoVsSolidario = () => {
   const produbanco = teamsStore.find((team) => normalizeFixtureTeamName(team.name).includes('produbanco'))
   const solidario = teamsStore.find(
@@ -591,7 +782,7 @@ const ensureRoundOnePostponedProdubancoVsSolidario = () => {
         entry.matchId === `manual__1__${solidario.id}__${produbanco.id}`),
   )
 
-  const postponedIsoDate = '2026-03-07T05:30:00-05:00'
+  const postponedIsoDate = '2026-03-07T17:30:00-05:00'
 
   if (pairMatch) {
     let changed = false
@@ -624,105 +815,13 @@ const ensureRoundOnePostponedProdubancoVsSolidario = () => {
 }
 
 const ensureRoundOneAustroVsPacificoFromPlayed = () => {
-  const austro = teamsStore.find((team) => normalizeFixtureTeamName(team.name).includes('austro'))
-  const pacifico = teamsStore.find(
-    (team) =>
-      team.leagueId === austro?.leagueId &&
-      team.categoryId === austro?.categoryId &&
-      normalizeFixtureTeamName(team.name).includes('pacifico'),
-  )
-
-  if (!austro || !pacifico) return false
-
-  const canonicalMatchId = `manual__1__${austro.id}__${pacifico.id}`
-  const austroDisplayName = austro.name.includes('Banco') ? austro.name : `Banco ${austro.name}`
-  const pacificoDisplayName = pacifico.name.includes('Banco') ? pacifico.name : `Banco ${pacifico.name}`
-
-  const existingIndex = playedMatchesStore.findIndex((item) => {
-    if (item.leagueId !== austro.leagueId || item.categoryId !== austro.categoryId || item.round !== 1) return false
-    const home = normalizeFixtureTeamName(item.homeTeamName)
-    const away = normalizeFixtureTeamName(item.awayTeamName)
-    const direct = home.includes('austro') && away.includes('pacifico')
-    const reverse = home.includes('pacifico') && away.includes('austro')
-    return direct || reverse
+  return ensureRoundOneFinishedMatch({
+    homeTeamKeyword: 'austro',
+    awayTeamKeyword: 'pacifico',
+    homeGoals: 0,
+    awayGoals: 2,
+    playedAt: '2026-03-07T16:00:00-05:00',
   })
-
-  const playedAt = '2026-03-07T16:00:00-05:00'
-  let changed = false
-
-  if (existingIndex >= 0) {
-    const existing = playedMatchesStore[existingIndex]!
-    if (existing.matchId !== canonicalMatchId) {
-      existing.matchId = canonicalMatchId
-      changed = true
-    }
-    if (existing.homeTeamName !== austroDisplayName) {
-      existing.homeTeamName = austroDisplayName
-      changed = true
-    }
-    if (existing.awayTeamName !== pacificoDisplayName) {
-      existing.awayTeamName = pacificoDisplayName
-      changed = true
-    }
-    if (existing.homeStats.goals !== 0 || existing.awayStats.goals !== 2) {
-      existing.homeStats.goals = 0
-      existing.awayStats.goals = 2
-      changed = true
-    }
-    if ((existing.playedAt ?? '') !== playedAt) {
-      existing.playedAt = playedAt
-      changed = true
-    }
-  } else {
-    playedMatchesStore.push({
-      matchId: canonicalMatchId,
-      leagueId: austro.leagueId,
-      categoryId: austro.categoryId,
-      round: 1,
-      finalMinute: 30,
-      homeTeamName: austroDisplayName,
-      awayTeamName: pacificoDisplayName,
-      homeStats: { shots: 0, goals: 0, yellows: 0, reds: 0, assists: 0 },
-      awayStats: { shots: 0, goals: 2, yellows: 0, reds: 0, assists: 0 },
-      players: [],
-      goals: [],
-      events: [],
-      highlightVideos: [],
-      playedAt,
-    })
-    changed = true
-  }
-
-  const scheduleIndex = fixtureScheduleStore.findIndex(
-    (entry) =>
-      entry.leagueId === austro.leagueId &&
-      entry.categoryId === austro.categoryId &&
-      entry.round === 1 &&
-      (entry.matchId === canonicalMatchId || entry.matchId === `manual__1__${pacifico.id}__${austro.id}`),
-  )
-
-  if (scheduleIndex >= 0) {
-    const scheduled = fixtureScheduleStore[scheduleIndex]!
-    if (scheduled.matchId !== canonicalMatchId) {
-      scheduled.matchId = canonicalMatchId
-      changed = true
-    }
-    if ((scheduled.scheduledAt ?? '') !== playedAt) {
-      scheduled.scheduledAt = playedAt
-      changed = true
-    }
-  } else {
-    fixtureScheduleStore.push({
-      leagueId: austro.leagueId,
-      categoryId: austro.categoryId,
-      matchId: canonicalMatchId,
-      round: 1,
-      scheduledAt: playedAt,
-    })
-    changed = true
-  }
-
-  return changed
 }
 export const ensureOperationalSeedData = () => {
   const hadLeague = leaguesStore.some((league) => league.id === seedLeagueId)
@@ -746,8 +845,31 @@ export const ensureOperationalSeedData = () => {
   ensureSeedData()
   const injectedPostponedMatch = ensureRoundOnePostponedProdubancoVsSolidario()
   const injectedAustroPacificoMatch = ensureRoundOneAustroVsPacificoFromPlayed()
+  const injectedBolivarianoAtlantidaMatch = ensureRoundOneFinishedMatch({
+    homeTeamKeyword: 'bolivariano',
+    awayTeamKeyword: 'atlantida',
+    homeGoals: 5,
+    awayGoals: 0,
+    playedAt: '2026-03-07T16:30:00-05:00',
+  })
+  const injectedGuayaquilPichinchaMatch = ensureRoundOneFinishedMatch({
+    homeTeamKeyword: 'guayaquil',
+    awayTeamKeyword: 'pichincha',
+    homeGoals: 4,
+    awayGoals: 1,
+    playedAt: '2026-03-07T17:00:00-05:00',
+  })
 
-  if (!hadLeague || !hadTeams || !hadSchedule || !hasSuperAdmin || injectedPostponedMatch || injectedAustroPacificoMatch) {
+  if (
+    !hadLeague ||
+    !hadTeams ||
+    !hadSchedule ||
+    !hasSuperAdmin ||
+    injectedPostponedMatch ||
+    injectedAustroPacificoMatch ||
+    injectedBolivarianoAtlantidaMatch ||
+    injectedGuayaquilPichinchaMatch
+  ) {
     persistLocalData()
   }
 }
