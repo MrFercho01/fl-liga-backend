@@ -72,6 +72,7 @@ export interface RegisteredPlayer {
   number: number
   position: string
   photoUrl?: string
+  registrationStatus?: 'pending' | 'registered'
 }
 
 export interface RegisteredTeam {
@@ -823,6 +824,22 @@ const ensureRoundOneAustroVsPacificoFromPlayed = () => {
     playedAt: '2026-03-07T16:00:00-05:00',
   })
 }
+
+const normalizePlayersRegistrationStatus = () => {
+  let updated = false
+
+  teamsStore.forEach((team) => {
+    team.players.forEach((player) => {
+      if (!player.registrationStatus) {
+        player.registrationStatus = 'registered'
+        updated = true
+      }
+    })
+  })
+
+  return updated
+}
+
 export const ensureOperationalSeedData = () => {
   const hadLeague = leaguesStore.some((league) => league.id === seedLeagueId)
   const hadTeams = teamsStore.some((team) => team.leagueId === seedLeagueId && team.categoryId === seedCategoryId)
@@ -859,6 +876,7 @@ export const ensureOperationalSeedData = () => {
     awayGoals: 1,
     playedAt: '2026-03-07T17:00:00-05:00',
   })
+  const normalizedPlayerRegistrationStatus = normalizePlayersRegistrationStatus()
 
   if (
     !hadLeague ||
@@ -868,7 +886,8 @@ export const ensureOperationalSeedData = () => {
     injectedPostponedMatch ||
     injectedAustroPacificoMatch ||
     injectedBolivarianoAtlantidaMatch ||
-    injectedGuayaquilPichinchaMatch
+    injectedGuayaquilPichinchaMatch ||
+    normalizedPlayerRegistrationStatus
   ) {
     persistLocalData()
   }

@@ -24,6 +24,7 @@ export interface Player {
   position: string
   age: number
   photoUrl?: string
+  registrationStatus?: 'pending' | 'registered'
 }
 
 export interface TeamStats {
@@ -187,6 +188,7 @@ const createTeamFromRegistered = (team: RegisteredTeam, playersOnField: number):
     position: player.position,
     age: player.age,
     ...(player.photoUrl ? { photoUrl: player.photoUrl } : {}),
+    ...(player.registrationStatus ? { registrationStatus: player.registrationStatus } : {}),
   }))
 
   const starters = players.slice(0, playersOnField).map((player) => player.id)
@@ -212,6 +214,76 @@ const createTeamFromRegistered = (team: RegisteredTeam, playersOnField: number):
     stats: emptyStats(),
     playerStats,
   }
+}
+
+export const syncLiveTeamFromRegistered = (team: RegisteredTeam, playersOnField: number) => {
+  const liveTeam =
+    liveMatchStore.homeTeam.id === team.id
+      ? liveMatchStore.homeTeam
+      : liveMatchStore.awayTeam.id === team.id
+        ? liveMatchStore.awayTeam
+        : null
+
+  if (!liveTeam) return false
+
+  const players = team.players.map((player) => ({
+    id: player.id,
+    name: player.name,
+    nickname: player.nickname,
+    number: player.number,
+    position: player.position,
+    age: player.age,
+    ...(player.photoUrl ? { photoUrl: player.photoUrl } : {}),
+    ...(player.registrationStatus ? { registrationStatus: player.registrationStatus } : {}),
+  }))
+
+  const availableIds = new Set(players.map((player) => player.id))
+  liveTeam.players = players
+  liveTeam.redCarded = liveTeam.redCarded.filter((playerId) => availableIds.has(playerId))
+
+  const redCardedIds = new Set(liveTeam.redCarded)
+  const preservedStarters = liveTeam.starters.filter((playerId) => availableIds.has(playerId) && !redCardedIds.has(playerId))
+  const startersSet = new Set(preservedStarters)
+
+  for (const player of players) {
+    if (preservedStarters.length >= playersOnField) break
+    if (!startersSet.has(player.id) && !redCardedIds.has(player.id)) {
+      preservedStarters.push(player.id)
+      startersSet.add(player.id)
+    }
+  }
+
+  const substitutes = players
+    .map((player) => player.id)
+    .filter((playerId) => !startersSet.has(playerId) && !redCardedIds.has(playerId))
+
+  liveTeam.starters = preservedStarters.slice(0, Math.max(0, playersOnField))
+  liveTeam.substitutes = substitutes
+
+  const nextPlayerStats: Record<string, PlayerStats> = {}
+  players.forEach((player) => {
+    nextPlayerStats[player.id] = liveTeam.playerStats[player.id] ?? emptyPlayerStats()
+  })
+  liveTeam.playerStats = nextPlayerStats
+
+  if (team.technicalStaff) {
+    liveTeam.technicalStaff = team.technicalStaff
+  } else {
+    delete liveTeam.technicalStaff
+  }
+
+  liveTeam.staffDiscipline = {
+    director: {
+      ...liveTeam.staffDiscipline.director,
+      ...(team.technicalStaff?.director?.name ? { name: team.technicalStaff.director.name } : {}),
+    },
+    assistant: {
+      ...liveTeam.staffDiscipline.assistant,
+      ...(team.technicalStaff?.assistant?.name ? { name: team.technicalStaff.assistant.name } : {}),
+    },
+  }
+
+  return true
 }
 
 export const liveMatchStore: LiveMatch = {

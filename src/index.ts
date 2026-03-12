@@ -42,6 +42,7 @@ import {
   registerEvent,
   setMatchStatusAction,
   setTimerAction,
+  syncLiveTeamFromRegistered,
   updateLineupWithFormation,
   updateSettings,
 } from './live'
@@ -134,6 +135,9 @@ app.use(
   }),
 )
 app.use(express.json({ limit: '12mb' }))
+
+const androidPublicDir = path.resolve(process.cwd(), 'public/android')
+app.use('/android', express.static(androidPublicDir, { maxAge: '1h' }))
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -1773,6 +1777,7 @@ const createPlayerSchema = z.object({
   number: z.number().int().min(1).max(99),
   position: z.string().min(2),
   photoUrl: z.string().trim().min(1).optional(),
+  registrationStatus: z.enum(['pending', 'registered']).optional(),
   replacePlayerId: z.string().uuid().optional(),
   replacementReason: z.enum(['injury']).optional(),
 })
@@ -1839,11 +1844,21 @@ app.post('/api/admin/teams/:teamId/players', (request, response) => {
     age: parsed.data.age,
     number: parsed.data.number,
     position: parsed.data.position.trim().toUpperCase(),
+    registrationStatus: parsed.data.registrationStatus ?? 'pending',
     ...(parsed.data.photoUrl ? { photoUrl: parsed.data.photoUrl } : {}),
   }
 
   team.players.push(player)
+  const playersOnField = resolvePlayersOnField(team.leagueId, team.categoryId)
+  const registeredTeamSnapshot: RegisteredTeam = {
+    ...team,
+    players: team.players.filter((item) => item.registrationStatus === 'registered'),
+  }
+  const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
   persistLocalData()
+  if (syncedLive) {
+    broadcastLive()
+  }
   response.status(201).json({ data: team })
 })
 
@@ -1990,6 +2005,7 @@ const updatePlayerSchema = z.object({
   number: z.number().int().min(1).max(99).optional(),
   position: z.string().min(2).optional(),
   photoUrl: z.string().trim().min(1).optional(),
+  registrationStatus: z.enum(['pending', 'registered']).optional(),
 })
 
 app.patch('/api/admin/teams/:teamId/players/:playerId', (request, response) => {
@@ -2041,8 +2057,20 @@ app.patch('/api/admin/teams/:teamId/players/:playerId', (request, response) => {
   if (parsed.data.photoUrl !== undefined) {
     player.photoUrl = parsed.data.photoUrl
   }
+  if (parsed.data.registrationStatus !== undefined) {
+    player.registrationStatus = parsed.data.registrationStatus
+  }
 
+  const playersOnField = resolvePlayersOnField(team.leagueId, team.categoryId)
+  const registeredTeamSnapshot: RegisteredTeam = {
+    ...team,
+    players: team.players.filter((item) => item.registrationStatus === 'registered'),
+  }
+  const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
   persistLocalData()
+  if (syncedLive) {
+    broadcastLive()
+  }
 
   response.json({ data: team })
 })
@@ -2075,7 +2103,17 @@ app.delete('/api/admin/teams/:teamId/players/:playerId', (request, response) => 
   }
 
   team.players.splice(playerIndex, 1)
+
+  const playersOnField = resolvePlayersOnField(team.leagueId, team.categoryId)
+  const registeredTeamSnapshot: RegisteredTeam = {
+    ...team,
+    players: team.players.filter((item) => item.registrationStatus === 'registered'),
+  }
+  const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
   persistLocalData()
+  if (syncedLive) {
+    broadcastLive()
+  }
   response.json({ data: team })
 })
 
@@ -2912,11 +2950,23 @@ app.post('/api/admin/live/load-match', (request, response) => {
     return
   }
 
+  const homeRegisteredPlayers = homeTeam.players.filter((player) => player.registrationStatus === 'registered')
+  const awayRegisteredPlayers = awayTeam.players.filter((player) => player.registrationStatus === 'registered')
+
+  const homeTeamForLive: RegisteredTeam = {
+    ...homeTeam,
+    players: homeRegisteredPlayers,
+  }
+  const awayTeamForLive: RegisteredTeam = {
+    ...awayTeam,
+    players: awayRegisteredPlayers,
+  }
+
   loadMatchForLive({
     leagueName: league.name,
     categoryName: category.name,
-    homeTeam,
-    awayTeam,
+    homeTeam: homeTeamForLive,
+    awayTeam: awayTeamForLive,
     playersOnField: category.rules.playersOnField,
     matchMinutes: category.rules.matchMinutes,
     breakMinutes: category.rules.breakMinutes,
