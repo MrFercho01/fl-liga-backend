@@ -119,6 +119,23 @@
   "playedMatches": [],
   "auditLogs": [
     {
+      "id": "cd791886-df1b-40ed-bfdf-aab09385b113",
+      "timestamp": "2026-03-17T16:35:46.413Z",
+      "userId": "super-admin",
+      "userEmail": "mrfercho@flliga.local",
+      "action": "login_success",
+      "ip": "::1"
+    },
+    {
+      "id": "388986c5-f9e2-4aa8-81fb-1d9d648183c3",
+      "timestamp": "2026-03-17T16:35:40.331Z",
+      "userId": "unknown",
+      "userEmail": "mrfercho",
+      "action": "login_failed",
+      "ip": "::1",
+      "details": "Intento #1"
+    },
+    {
       "id": "8a806d16-47d3-440c-a341-9e0ce56bfe17",
       "timestamp": "2026-03-07T03:23:50.099Z",
       "userId": "client-adcfd63f",
@@ -158,8 +175,9 @@
       "clientUserId": "client-adcfd63f",
       "token": "cli_b40dfd2900964bc3b7ab1e17210a364e",
       "expiresAt": "2026-03-10T03:22:00.000Z",
-      "active": true,
-      "createdAt": "2026-03-07T03:22:24.919Z"
+      "active": false,
+      "createdAt": "2026-03-07T03:22:24.919Z",
+      "revokedAt": "2026-03-17T16:35:46.563Z"
     }
   ]
 }
