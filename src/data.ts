@@ -1,3 +1,12 @@
+// Utilidad para normalizar o validar clientId público
+export function resolvePublicClientId(clientId: string): string | null {
+  if (typeof clientId !== 'string' || !clientId.trim()) return null;
+  // Si el clientId es un UUID válido, lo retorna, si no retorna null
+  const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  if (uuidRegex.test(clientId.trim())) return clientId.trim();
+  // Si hay algún mapeo especial, agregar aquí
+  return null;
+}
 import fs from 'node:fs'
 import path from 'node:path'
 import { GridFSBucket, MongoClient, ObjectId, type Collection, type Db } from 'mongodb'
