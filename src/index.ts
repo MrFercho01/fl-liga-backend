@@ -10,7 +10,7 @@ import {
   playedMatchesStore,
   roundAwardsStore,
   fixtureScheduleStore,
-  persistLocalData,
+  persistMongoData,
   refreshStoresFromMongoSnapshot,
   resolvePublicClientId,
   SUPER_ADMIN_USER_ID,
@@ -235,7 +235,7 @@ app.post('/api/public/client/:clientId/engagement', (request: Request, response:
     engagement.likes = Math.max(0, engagement.likes + delta);
   }
   engagement.updatedAt = new Date().toISOString();
-  persistLocalData();
+    persistMongoData();
   response.json({
     data: {
       clientId,
@@ -289,7 +289,7 @@ app.post('/api/public/client/:clientId/matches/:matchId/engagement', (request: R
   const entry = ensurePublicMatchLike(clientId, parsed.data.leagueId, parsed.data.categoryId, matchId);
   entry.likes = Math.max(0, entry.likes + parsed.data.delta);
   entry.updatedAt = new Date().toISOString();
-  persistLocalData();
+    persistMongoData();
   response.json({
     data: {
       likes: entry.likes,
@@ -389,7 +389,7 @@ app.post('/api/admin/leagues/:leagueId/teams', (request, response) => {
   }
 
   teamsStore.push(team)
-  persistLocalData()
+  persistMongoData()
   response.status(201).json({ data: team })
 })
 
@@ -478,7 +478,7 @@ app.post('/api/admin/teams/:teamId/players', (request, response) => {
     players: team.players.filter((item) => item.registrationStatus === 'registered'),
   }
   const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
-  persistLocalData()
+  persistMongoData()
   if (syncedLive) {
     broadcastLive()
   }
@@ -599,7 +599,7 @@ app.patch('/api/admin/teams/:teamId', (request, response) => {
     }
   }
 
-  persistLocalData()
+  persistMongoData()
 
   response.json({ data: team })
 })
@@ -632,7 +632,7 @@ app.delete('/api/admin/teams/:teamId', (request, response) => {
   }
 
   teamsStore.splice(index, 1)
-  persistLocalData()
+  persistMongoData()
   response.json({ ok: true })
 })
 
@@ -705,7 +705,7 @@ app.patch('/api/admin/teams/:teamId/players/:playerId', (request, response) => {
     players: team.players.filter((item) => item.registrationStatus === 'registered'),
   }
   const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
-  persistLocalData()
+  persistMongoData()
   if (syncedLive) {
     broadcastLive()
   }
@@ -748,7 +748,7 @@ app.delete('/api/admin/teams/:teamId/players/:playerId', (request, response) => 
     players: team.players.filter((item) => item.registrationStatus === 'registered'),
   }
   const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
-  persistLocalData()
+  persistMongoData()
   if (syncedLive) {
     broadcastLive()
   }
@@ -873,7 +873,7 @@ app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', (request, res
     fixtureScheduleStore[existingIndex] = next
   }
 
-  persistLocalData()
+  persistMongoData()
 
   response.json({ data: next })
 })
@@ -912,7 +912,7 @@ app.delete('/api/admin/leagues/:leagueId/matches/:matchId/schedule', (request, r
   }
 
   fixtureScheduleStore.splice(existingIndex, 1)
-  persistLocalData()
+  persistMongoData()
 
   response.json({ data: { deleted: true } })
 })
@@ -1008,7 +1008,7 @@ app.post('/api/admin/leagues/:leagueId/round-awards', (request, response) => {
     roundAwardsStore[existingIndex] = next
   }
 
-  persistLocalData()
+  persistMongoData()
   response.json({ data: next })
 })
 
@@ -1299,7 +1299,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches', (request, response) => {
     playedMatchesStore[existingIndex] = nextRecord
   }
 
-  persistLocalData()
+  persistMongoData()
 
   response.json({ data: nextRecord })
 })
@@ -1361,7 +1361,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', (request
   }
 
   match.highlightVideos.push(video)
-  persistLocalData()
+  persistMongoData()
   response.json({ data: match })
 })
 
@@ -1452,7 +1452,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
     }
 
     match.highlightVideos.push(video)
-    persistLocalData()
+    persistMongoData()
     response.json({ data: match })
   } catch {
     response.status(500).json({ message: 'No se pudo procesar/cargar el video' })
@@ -1491,7 +1491,7 @@ app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId
   }
 
   match.highlightVideos.splice(videoIdx, 1)
-  persistLocalData()
+  persistMongoData()
   response.json({ data: match })
 })
 
@@ -1705,7 +1705,7 @@ app.post('/api/admin/leagues', (request, response) => {
   }
 
   leaguesStore.push(league)
-  persistLocalData()
+  persistMongoData()
   response.status(201).json({ data: league })
 })
 
@@ -1794,7 +1794,7 @@ app.patch('/api/admin/leagues/:leagueId', (request, response) => {
   }
 
   leaguesStore[leagueIndex] = nextLeague
-  persistLocalData()
+  persistMongoData()
 
   response.json({ data: leaguesStore[leagueIndex] })
 })
@@ -1824,7 +1824,7 @@ app.delete('/api/admin/leagues/:leagueId', (request, response) => {
   // Soft delete: marcar como inactiva
   league.active = false
   leaguesStore[index] = league
-  persistLocalData()
+  persistMongoData()
   response.json({ ok: true, message: 'Liga desactivada (soft delete)' })
 })
 
@@ -1934,7 +1934,7 @@ const startServer = async () => {
 
   const migratedLineupsCount = migratePlayedMatchesLineups()
   if (migratedLineupsCount > 0) {
-    persistLocalData()
+    persistMongoData()
     console.log(`Migración de lineups históricos completada: ${migratedLineupsCount} partidos actualizados.`)
   }
 

@@ -951,11 +951,11 @@ const applyLocalBaseOnlyMode = () => {
   clientAccessTokensStore.length = 0
 }
 
-export const persistLocalData = () => {
-  const snapshot = buildSnapshot()
 
-  fs.writeFileSync(localDbPath, JSON.stringify(snapshot, null, 2), 'utf-8')
-  queueMongoPersist(snapshot)
+// Nueva función: persistir solo en MongoDB
+export const persistMongoData = () => {
+  const snapshot = buildSnapshot();
+  queueMongoPersist(snapshot);
 }
 
 export const flushPersistQueue = async () => {
