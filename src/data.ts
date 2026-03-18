@@ -1,3 +1,19 @@
+// --- Persistencia granular de ligas ---
+export const getLeaguesCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  return mongoDb!.collection<League>('leagues');
+};
+
+export const saveLeagueToMongo = async (league: League) => {
+  const collection = await getLeaguesCollection();
+  await collection.insertOne(league);
+};
+
+export const getAllLeaguesFromMongo = async (): Promise<League[]> => {
+  const collection = await getLeaguesCollection();
+  return collection.find({}).toArray();
+};
 // Utilidad para normalizar o validar clientId público
 export function resolvePublicClientId(clientId: string): string | null {
   if (typeof clientId !== 'string' || !clientId.trim()) return null;

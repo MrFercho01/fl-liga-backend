@@ -10,11 +10,12 @@ import {
   playedMatchesStore,
   roundAwardsStore,
   fixtureScheduleStore,
-  persistMongoData,
   refreshStoresFromMongoSnapshot,
   resolvePublicClientId,
   SUPER_ADMIN_USER_ID,
   getMongoObjectId,
+  saveLeagueToMongo,
+  getAllLeaguesFromMongo,
   type RegisteredTeam,
   type RegisteredPlayer
 } from './data';
@@ -1668,7 +1669,7 @@ const createLeagueSchema = z.object({
   categories: z.array(categorySchema).min(1),
 })
 
-app.post('/api/admin/leagues', (request, response) => {
+app.post('/api/admin/leagues', async (request, response) => {
   const user = requireAuth(request, response)
   if (!user) return
 
@@ -1678,7 +1679,9 @@ app.post('/api/admin/leagues', (request, response) => {
     return
   }
 
-  const duplicatedSlug = leaguesStore.some(
+  // Verificar duplicados en MongoDB
+  const allLeagues = await getAllLeaguesFromMongo();
+  const duplicatedSlug = allLeagues.some(
     (league) => league.slug === parsed.data.slug && league.season === parsed.data.season,
   )
   if (duplicatedSlug) {
@@ -1704,8 +1707,14 @@ app.post('/api/admin/leagues', (request, response) => {
     })),
   }
 
+  // Guardar en memoria y en MongoDB
   leaguesStore.push(league)
-  persistMongoData()
+  try {
+    await saveLeagueToMongo(league)
+  } catch (err) {
+    response.status(500).json({ message: 'Error al guardar liga en MongoDB', error: String(err) })
+    return
+  }
   response.status(201).json({ data: league })
 })
 
