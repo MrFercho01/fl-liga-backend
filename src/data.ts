@@ -898,7 +898,6 @@ export const ensureOperationalSeedData = () => {
     injectedGuayaquilPichinchaMatch ||
     normalizedPlayerRegistrationStatus
   ) {
-    persistLocalData()
   }
 }
 
@@ -1000,5 +999,4 @@ export const initializeDataStore = async () => {
 
   ensureSeedData()
   applyLocalBaseOnlyMode()
-  persistLocalData()
 }
