@@ -1,3 +1,85 @@
+// --- Persistencia granular de equipos ---
+export const getTeamsCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  return mongoDb!.collection<RegisteredTeam>('teams');
+};
+
+export const saveTeamToMongo = async (team: RegisteredTeam) => {
+  const collection = await getTeamsCollection();
+  await collection.replaceOne({ id: team.id }, team, { upsert: true });
+};
+
+export const getAllTeamsFromMongo = async (): Promise<RegisteredTeam[]> => {
+  const collection = await getTeamsCollection();
+  return collection.find({}).toArray();
+};
+
+// --- Persistencia granular de fixture/schedule ---
+export const getFixtureScheduleCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  return mongoDb!.collection<FixtureScheduleEntry>('fixture_schedule');
+};
+
+export const saveFixtureScheduleToMongo = async (entry: FixtureScheduleEntry) => {
+  const collection = await getFixtureScheduleCollection();
+  await collection.replaceOne({ leagueId: entry.leagueId, categoryId: entry.categoryId, matchId: entry.matchId }, entry, { upsert: true });
+};
+
+export const getAllFixtureSchedulesFromMongo = async (): Promise<FixtureScheduleEntry[]> => {
+  const collection = await getFixtureScheduleCollection();
+  return collection.find({}).toArray();
+};
+
+// --- Persistencia granular de premios de ronda ---
+export const getRoundAwardsCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  return mongoDb!.collection<RoundAwardsEntry>('round_awards');
+};
+
+export const saveRoundAwardToMongo = async (entry: RoundAwardsEntry) => {
+  const collection = await getRoundAwardsCollection();
+  await collection.replaceOne({ leagueId: entry.leagueId, categoryId: entry.categoryId, round: entry.round }, entry, { upsert: true });
+};
+
+export const getAllRoundAwardsFromMongo = async (): Promise<RoundAwardsEntry[]> => {
+  const collection = await getRoundAwardsCollection();
+  return collection.find({}).toArray();
+};
+// --- Persistencia granular: Partidos jugados y videos destacados ---
+export const getPlayedMatchesCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  return mongoDb!.collection<PlayedMatchRecord>('played_matches');
+};
+
+export const savePlayedMatchToMongo = async (match: PlayedMatchRecord) => {
+  const collection = await getPlayedMatchesCollection();
+  await collection.insertOne(match);
+};
+
+export const getAllPlayedMatchesFromMongo = async (): Promise<PlayedMatchRecord[]> => {
+  const collection = await getPlayedMatchesCollection();
+  return collection.find({}).toArray();
+};
+
+export const getHighlightVideosCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  return mongoDb!.collection<MatchHighlightVideo>('highlight_videos');
+};
+
+export const saveHighlightVideoToMongo = async (video: MatchHighlightVideo) => {
+  const collection = await getHighlightVideosCollection();
+  await collection.insertOne(video);
+};
+
+export const getAllHighlightVideosFromMongo = async (): Promise<MatchHighlightVideo[]> => {
+  const collection = await getHighlightVideosCollection();
+  return collection.find({}).toArray();
+};
 // --- Persistencia granular de ligas ---
 export const getLeaguesCollection = async () => {
   if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
