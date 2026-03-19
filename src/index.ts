@@ -1,10 +1,7 @@
-
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import {
-  publicEngagementStore,
-  publicMatchLikesStore,
   resolvePublicClientId,
   SUPER_ADMIN_USER_ID,
   getMongoObjectId,
@@ -60,6 +57,7 @@ import {
   transcodeVideoIfPossible
 } from './video';
 import { Readable } from 'stream';
+import { MongoClient, Collection } from 'mongodb';
 import { io } from './io';
 import { httpServer, port } from './server-stub';
 import { initializeDataStore, migratePlayedMatchesLineups } from './init-stub';
@@ -69,25 +67,19 @@ const app = express();
 
 
 
-// Helper para likes de partidos públicos
-function ensurePublicMatchLike(clientId: string, leagueId: string, categoryId: string, matchId: string) {
-  let entry = publicMatchLikesStore.find(
-    (item) =>
-      item.clientId === clientId &&
-      item.leagueId === leagueId &&
-      item.categoryId === categoryId &&
-      item.matchId === matchId
-  );
+// Helper para likes de partidos públicos usando MongoDB
+async function ensurePublicMatchLike(clientId: string, leagueId: string, categoryId: string, matchId: string, db: Collection<any>) {
+  let entry = await db.findOne({ clientId, leagueId, categoryId, matchId });
   if (!entry) {
     entry = {
-      clientId: clientId,
-      leagueId: leagueId,
-      categoryId: categoryId,
-      matchId: matchId,
+      clientId,
+      leagueId,
+      categoryId,
+      matchId,
       likes: 0,
       updatedAt: new Date().toISOString()
     };
-    publicMatchLikesStore.push(entry);
+    await db.insertOne(entry);
   }
   return entry;
 }
@@ -98,17 +90,17 @@ const publicEngagementUpdateSchema = z.object({
   delta: z.number().int().min(-1).max(1).optional(),
 });
 
-// Helper para engagement público
-function ensurePublicEngagement(clientId: string) {
-  let entry = publicEngagementStore.find((item) => item.clientId === clientId);
+// Helper para engagement público usando MongoDB
+async function ensurePublicEngagement(clientId: string, db: Collection<any>) {
+  let entry = await db.findOne({ clientId });
   if (!entry) {
     entry = {
-      clientId: clientId,
+      clientId,
       visits: 0,
       likes: 0,
       updatedAt: new Date().toISOString()
     };
-    publicEngagementStore.push(entry);
+    await db.insertOne(entry);
   }
   return entry;
 }
@@ -120,7 +112,7 @@ const publicMatchLikeUpdateSchema = z.object({
   delta: z.number().int().min(-1).max(1),
 });
 
-// --- Helpers eliminados: publicMatchLikesStore, publicEngagementStore ---
+// --- Helpers migrados a MongoDB: publicMatchLikesStore, publicEngagementStore ---
 
 
 const parseMatchIdentity = (matchId: string) => {
@@ -211,14 +203,17 @@ app.get('/api/public/client/:clientId/leagues', async (request: Request, respons
   response.json({ data });
 });
 
-app.get('/api/public/client/:clientId/engagement', (request: Request, response: Response) => {
+app.get('/api/public/client/:clientId/engagement', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
   const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' });
     return;
   }
-  const engagement = ensurePublicEngagement(clientId);
+  const mongo = await MongoClient.connect(process.env.MONGODB_URI!);
+  const db = mongo.db(process.env.MONGODB_DB_NAME!);
+  const collection = db.collection('public_engagement');
+  const engagement = await ensurePublicEngagement(clientId, collection);
   response.json({
     data: {
       clientId,
@@ -227,9 +222,10 @@ app.get('/api/public/client/:clientId/engagement', (request: Request, response: 
       updatedAt: engagement.updatedAt,
     },
   });
+  await mongo.close();
 });
 
-app.post('/api/public/client/:clientId/engagement', (request: Request, response: Response) => {
+app.post('/api/public/client/:clientId/engagement', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
   const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
@@ -241,7 +237,10 @@ app.post('/api/public/client/:clientId/engagement', (request: Request, response:
     response.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() });
     return;
   }
-  const engagement = ensurePublicEngagement(clientId);
+  const mongo = await MongoClient.connect(process.env.MONGODB_URI!);
+  const db = mongo.db(process.env.MONGODB_DB_NAME!);
+  const collection = db.collection('public_engagement');
+  const engagement = await ensurePublicEngagement(clientId, collection);
   if (parsed.data.action === 'visit') {
     engagement.visits += 1;
   } else {
@@ -249,6 +248,7 @@ app.post('/api/public/client/:clientId/engagement', (request: Request, response:
     engagement.likes = Math.max(0, engagement.likes + delta);
   }
   engagement.updatedAt = new Date().toISOString();
+  await collection.updateOne({ clientId }, { $set: engagement }, { upsert: true });
   response.json({
     data: {
       clientId,
@@ -257,9 +257,10 @@ app.post('/api/public/client/:clientId/engagement', (request: Request, response:
       updatedAt: engagement.updatedAt,
     },
   });
+  await mongo.close();
 });
 
-app.get('/api/public/client/:clientId/matches/:matchId/engagement', (request: Request, response: Response) => {
+app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
   const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
@@ -273,16 +274,20 @@ app.get('/api/public/client/:clientId/matches/:matchId/engagement', (request: Re
     response.status(400).json({ message: 'leagueId, categoryId y matchId son requeridos' });
     return;
   }
-  const entry = ensurePublicMatchLike(clientId, leagueId, categoryId, matchId);
+  const mongo = await MongoClient.connect(process.env.MONGODB_URI!);
+  const db = mongo.db(process.env.MONGODB_DB_NAME!);
+  const collection = db.collection('public_match_likes');
+  const entry = await ensurePublicMatchLike(clientId, leagueId, categoryId, matchId, collection);
   response.json({
     data: {
       likes: entry.likes,
       updatedAt: entry.updatedAt,
     },
   });
+  await mongo.close();
 });
 
-app.post('/api/public/client/:clientId/matches/:matchId/engagement', (request: Request, response: Response) => {
+app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
   const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
@@ -299,15 +304,20 @@ app.post('/api/public/client/:clientId/matches/:matchId/engagement', (request: R
     response.status(400).json({ message: 'matchId es requerido' });
     return;
   }
-  const entry = ensurePublicMatchLike(clientId, parsed.data.leagueId, parsed.data.categoryId, matchId);
+  const mongo = await MongoClient.connect(process.env.MONGODB_URI!);
+  const db = mongo.db(process.env.MONGODB_DB_NAME!);
+  const collection = db.collection('public_match_likes');
+  const entry = await ensurePublicMatchLike(clientId, parsed.data.leagueId, parsed.data.categoryId, matchId, collection);
   entry.likes = Math.max(0, entry.likes + parsed.data.delta);
   entry.updatedAt = new Date().toISOString();
+  await collection.updateOne({ clientId, leagueId: parsed.data.leagueId, categoryId: parsed.data.categoryId, matchId }, { $set: entry }, { upsert: true });
   response.json({
     data: {
       likes: entry.likes,
       updatedAt: entry.updatedAt,
     },
   });
+  await mongo.close();
 });
 
 app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request: Request, response: Response) => {
@@ -332,7 +342,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request
 });
 
 app.post('/api/admin/leagues/:leagueId/teams', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   // Buscar liga en MongoDB
@@ -425,7 +435,7 @@ const createPlayerSchema = z.object({
 })
 
 app.post('/api/admin/teams/:teamId/players', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allTeams = await getAllTeamsFromMongo();
@@ -499,7 +509,7 @@ app.post('/api/admin/teams/:teamId/players', async (request, response) => {
     response.status(500).json({ message: 'Error al guardar equipo en MongoDB', error: String(err) })
     return
   }
-  const playersOnField = resolvePlayersOnField(team.leagueId, team.categoryId)
+  const playersOnField = await resolvePlayersOnField(team.leagueId, team.categoryId)
   const registeredTeamSnapshot: RegisteredTeam = {
     ...team,
     players: team.players.filter((item) => item.registrationStatus === 'registered'),
@@ -508,7 +518,7 @@ app.post('/api/admin/teams/:teamId/players', async (request, response) => {
   if (syncedLive) {
     broadcastLive()
   }
-  response.status(201).json({ data: team })
+  response.json({ data: team })
 })
 
 const updateTeamSchema = z.object({
@@ -537,7 +547,7 @@ const updateTeamSchema = z.object({
 })
 
 app.patch('/api/admin/teams/:teamId', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allTeams = await getAllTeamsFromMongo();
@@ -635,7 +645,7 @@ app.patch('/api/admin/teams/:teamId', async (request, response) => {
 })
 
 app.delete('/api/admin/teams/:teamId', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allTeams = await getAllTeamsFromMongo();
@@ -679,7 +689,7 @@ const updatePlayerSchema = z.object({
 })
 
 app.patch('/api/admin/teams/:teamId/players/:playerId', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allTeams = await getAllTeamsFromMongo();
@@ -739,7 +749,7 @@ app.patch('/api/admin/teams/:teamId/players/:playerId', async (request, response
     response.status(500).json({ message: 'Error al guardar equipo en MongoDB', error: String(err) })
     return
   }
-  const playersOnField = resolvePlayersOnField(team.leagueId, team.categoryId)
+  const playersOnField = await resolvePlayersOnField(team.leagueId, team.categoryId)
   const registeredTeamSnapshot: RegisteredTeam = {
     ...team,
     players: team.players.filter((item) => item.registrationStatus === 'registered'),
@@ -752,7 +762,7 @@ app.patch('/api/admin/teams/:teamId/players/:playerId', async (request, response
 })
 
 app.delete('/api/admin/teams/:teamId/players/:playerId', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allTeams = await getAllTeamsFromMongo();
@@ -787,7 +797,7 @@ app.delete('/api/admin/teams/:teamId/players/:playerId', async (request, respons
     response.status(500).json({ message: 'Error al guardar equipo en MongoDB', error: String(err) })
     return
   }
-  const playersOnField = resolvePlayersOnField(team.leagueId, team.categoryId)
+  const playersOnField = await resolvePlayersOnField(team.leagueId, team.categoryId)
   const registeredTeamSnapshot: RegisteredTeam = {
     ...team,
     players: team.players.filter((item) => item.registrationStatus === 'registered'),
@@ -800,7 +810,7 @@ app.delete('/api/admin/teams/:teamId/players/:playerId', async (request, respons
 })
 
 app.get('/api/admin/leagues/:leagueId/fixture', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -837,7 +847,7 @@ app.get('/api/admin/leagues/:leagueId/fixture', async (request, response) => {
 })
 
 app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -879,7 +889,7 @@ const setScheduleSchema = z.object({
 })
 
 app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -920,7 +930,7 @@ app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (reques
 })
 
 app.delete('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -951,7 +961,7 @@ app.delete('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (requ
 })
 
 app.get('/api/admin/leagues/:leagueId/round-awards', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -1001,7 +1011,7 @@ const roundAwardsSchema = z.object({
 })
 
 app.post('/api/admin/leagues/:leagueId/round-awards', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -1044,7 +1054,7 @@ app.post('/api/admin/leagues/:leagueId/round-awards', async (request, response) 
 })
 
 app.get('/api/admin/leagues/:leagueId/round-awards-ranking', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -1101,7 +1111,7 @@ app.get('/api/admin/leagues/:leagueId/round-awards-ranking', async (request, res
 })
 
 app.get('/api/admin/leagues/:leagueId/played-matches', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -1255,7 +1265,7 @@ const playedMatchSchema = z.object({
 })
 
 app.post('/api/admin/leagues/:leagueId/played-matches', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -1352,7 +1362,7 @@ const buildPublicVideoUrl = (request: express.Request, videoId: string) => {
 }
 
 app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -1392,7 +1402,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', async (r
 })
 
 app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', upload.single('video'), async (request: any, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -1472,34 +1482,32 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
   }
 })
 
-app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId', (request, response) => {
-  (async () => {
-    const user = requireAuth(request, response)
-    if (!user) return
+app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId', async (request, response) => {
+  const user = await requireAuth(request, response)
+  if (!user) return
 
-    const allLeagues = await getAllLeaguesFromMongo();
-    const league = allLeagues.find((item) => item.id === request.params.leagueId)
-    if (!league) {
-      response.status(404).json({ message: 'Liga no encontrada' })
-      return
-    }
-    if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
-      response.status(403).json({ message: 'No tienes acceso a esta liga' })
-      return
-    }
-    const categoryId = String(request.query.categoryId ?? '')
-    const allMatches = await getAllPlayedMatchesFromMongo();
-    const match = allMatches.find(
-      (item) => item.leagueId === league.id && item.categoryId === categoryId && item.matchId === request.params.matchId,
-    )
-    if (!match) {
-      response.status(404).json({ message: 'Partido jugado no encontrado' })
-      return
-    }
-    // Eliminar video de la colección highlight_videos (puedes implementar deleteHighlightVideoFromMongo)
-    // Por ahora solo responde éxito
-    response.json({ data: match })
-  })()
+  const allLeagues = await getAllLeaguesFromMongo();
+  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+  if (!league) {
+    response.status(404).json({ message: 'Liga no encontrada' })
+    return
+  }
+  if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
+    response.status(403).json({ message: 'No tienes acceso a esta liga' })
+    return
+  }
+  const categoryId = String(request.query.categoryId ?? '')
+  const allMatches = await getAllPlayedMatchesFromMongo();
+  const match = allMatches.find(
+    (item) => item.leagueId === league.id && item.categoryId === categoryId && item.matchId === request.params.matchId,
+  )
+  if (!match) {
+    response.status(404).json({ message: 'Partido jugado no encontrado' })
+    return
+  }
+  // Eliminar video de la colección highlight_videos (puedes implementar deleteHighlightVideoFromMongo)
+  // Por ahora solo responde éxito
+  response.json({ data: match })
 })
 
 app.get('/api/public/videos/:videoId', async (request, response) => {
@@ -1563,7 +1571,7 @@ const loadLiveMatchSchema = z.object({
 })
 
 app.post('/api/admin/live/load-match', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const parsed = loadLiveMatchSchema.safeParse(request.body)
@@ -1664,7 +1672,7 @@ const createLeagueSchema = z.object({
 })
 
 app.post('/api/admin/leagues', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const parsed = createLeagueSchema.safeParse(request.body)
@@ -1713,7 +1721,7 @@ app.post('/api/admin/leagues', async (request, response) => {
 const updateLeagueSchema = createLeagueSchema.partial()
 
 app.patch('/api/admin/leagues/:leagueId', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();
@@ -1789,7 +1797,7 @@ app.patch('/api/admin/leagues/:leagueId', async (request, response) => {
 })
 
 app.delete('/api/admin/leagues/:leagueId', async (request, response) => {
-  const user = requireAuth(request, response)
+  const user = await requireAuth(request, response)
   if (!user) return
 
   const allLeagues = await getAllLeaguesFromMongo();

@@ -1,11 +1,14 @@
-import { leaguesStore } from './data';
+import { getAllLeaguesFromMongo } from './data';
 
 /**
  * Devuelve la cantidad de jugadores en cancha para una liga/categoría.
  * Busca en la liga y categoría correspondiente.
  */
-export function resolvePlayersOnField(leagueId: string, categoryId: string): number {
-  const league = leaguesStore.find(l => l.id === leagueId);
+
+// Ahora asíncrono usando MongoDB
+export async function resolvePlayersOnField(leagueId: string, categoryId: string): Promise<number> {
+  const leagues = await getAllLeaguesFromMongo();
+  const league = leagues.find(l => l.id === leagueId);
   const category = league?.categories.find(c => c.id === categoryId);
   return category?.rules.playersOnField || 11;
 }
