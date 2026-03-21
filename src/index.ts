@@ -1,3 +1,4 @@
+
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
@@ -64,6 +65,29 @@ import { initializeDataStore, migratePlayedMatchesLineups } from './init-stub';
 import cors from 'cors';
 
 const app = express();
+
+// Endpoint público compatible con frontend legacy
+app.get('/api/leagues', async (request: Request, response: Response) => {
+  const allLeagues = await getAllLeaguesFromMongo();
+  const data = allLeagues
+    .filter((league) => league.active)
+    .map((league) => ({
+      id: league.id,
+      name: league.name,
+      slug: league.slug,
+      country: league.country,
+      season: league.season,
+      slogan: league.slogan,
+      themeColor: league.themeColor,
+      backgroundImageUrl: league.backgroundImageUrl,
+      logoUrl: league.logoUrl,
+      categories: league.categories.map((category) => ({
+        id: category.id,
+        name: category.name,
+      })),
+    }));
+  response.json({ data });
+});
 
 const port = Number(process.env.PORT) || 3000;
 const httpServer = http.createServer(app);

@@ -9,6 +9,14 @@
       "active": true
     },
     {
+      "id": "mrfercho",
+      "name": "mrfercho",
+      "email": "mrfercho@flliga.com",
+      "password": "1623Fercho.",
+      "role": "super_admin",
+      "active": true
+    },
+    {
       "id": "client-adcfd63f",
       "name": "Fernando Lara",
       "organizationName": "FL Store",
