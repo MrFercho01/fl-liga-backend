@@ -61,15 +61,20 @@ import { MongoClient, Collection } from 'mongodb';
 import { io } from './io';
 import http from 'http';
 import { initializeDataStore, migratePlayedMatchesLineups } from './init-stub';
+import cors from 'cors';
 
 const app = express();
 
 const port = Number(process.env.PORT) || 3000;
 const httpServer = http.createServer(app);
 
-
-
-
+app.use(cors({
+  origin: [
+    'https://fl-liga-frontend.vercel.app',
+    'http://localhost:5173'
+  ],
+  credentials: true
+}));
 
 // Helper para likes de partidos públicos usando MongoDB
 async function ensurePublicMatchLike(clientId: string, leagueId: string, categoryId: string, matchId: string, db: Collection<any>) {
