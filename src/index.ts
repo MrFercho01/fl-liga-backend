@@ -59,10 +59,14 @@ import {
 import { Readable } from 'stream';
 import { MongoClient, Collection } from 'mongodb';
 import { io } from './io';
-import { httpServer, port } from './server-stub';
+import http from 'http';
 import { initializeDataStore, migratePlayedMatchesLineups } from './init-stub';
 
 const app = express();
+
+const port = Number(process.env.PORT) || 3000;
+const httpServer = http.createServer(app);
+
 
 
 
@@ -1932,8 +1936,8 @@ const startServer = async () => {
   }
 
   httpServer.listen(port, () => {
-    console.log(`FL Liga API corriendo en http://localhost:${port}`)
-  })
+    console.log(`FL Liga API corriendo en http://localhost:${port}`);
+  });
 }
 
 startServer().catch((error) => {
