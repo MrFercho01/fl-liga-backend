@@ -17,6 +17,7 @@ export const getTeamsCollection = async () => {
 };
 
 export const saveTeamToMongo = async (team: RegisteredTeam) => {
+  console.log('Guardando equipo en MongoDB:', JSON.stringify(team, null, 2));
   const collection = await getTeamsCollection();
   await collection.replaceOne({ id: team.id }, team, { upsert: true });
 };
@@ -34,6 +35,7 @@ export const getFixtureScheduleCollection = async () => {
 };
 
 export const saveFixtureScheduleToMongo = async (entry: FixtureScheduleEntry) => {
+  console.log('Guardando fixture schedule en MongoDB:', JSON.stringify(entry, null, 2));
   const collection = await getFixtureScheduleCollection();
   await collection.replaceOne({ leagueId: entry.leagueId, categoryId: entry.categoryId, matchId: entry.matchId }, entry, { upsert: true });
 };
@@ -51,6 +53,7 @@ export const getRoundAwardsCollection = async () => {
 };
 
 export const saveRoundAwardToMongo = async (entry: RoundAwardsEntry) => {
+  console.log('Guardando round award en MongoDB:', JSON.stringify(entry, null, 2));
   const collection = await getRoundAwardsCollection();
   await collection.replaceOne({ leagueId: entry.leagueId, categoryId: entry.categoryId, round: entry.round }, entry, { upsert: true });
 };
@@ -67,6 +70,7 @@ export const getPlayedMatchesCollection = async () => {
 };
 
 export const savePlayedMatchToMongo = async (match: PlayedMatchRecord) => {
+  console.log('Guardando played match en MongoDB:', JSON.stringify(match, null, 2));
   const collection = await getPlayedMatchesCollection();
   await collection.insertOne(match);
 };
@@ -83,6 +87,7 @@ export const getHighlightVideosCollection = async () => {
 };
 
 export const saveHighlightVideoToMongo = async (video: MatchHighlightVideo) => {
+  console.log('Guardando highlight video en MongoDB:', JSON.stringify(video, null, 2));
   const collection = await getHighlightVideosCollection();
   await collection.insertOne(video);
 };
@@ -99,6 +104,7 @@ export const getLeaguesCollection = async () => {
 };
 
 export const saveLeagueToMongo = async (league: League) => {
+  console.log('Guardando liga en MongoDB:', JSON.stringify(league, null, 2));
   const collection = await getLeaguesCollection();
   await collection.insertOne(league);
 };
