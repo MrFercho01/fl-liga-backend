@@ -64,7 +64,18 @@ import http from 'http';
 import { initializeDataStore, migratePlayedMatchesLineups } from './init-stub';
 import cors from 'cors';
 
+
 const app = express();
+
+// CORS y JSON parser antes de los endpoints
+app.use(cors({
+  origin: [
+    'https://fl-liga-frontend.vercel.app',
+    'http://localhost:5173'
+  ],
+  credentials: true
+}));
+app.use(express.json());
 
 // Endpoint público compatible con frontend legacy
 app.get('/api/leagues', async (request: Request, response: Response) => {
@@ -210,7 +221,7 @@ app.get('/api/public/leagues', async (request: Request, response: Response) => {
 
 app.get('/api/public/client/:clientId/leagues', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
-  const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
+  const clientId = typeof rawClientId === 'string' ? await resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' });
     return;
@@ -238,7 +249,7 @@ app.get('/api/public/client/:clientId/leagues', async (request: Request, respons
 
 app.get('/api/public/client/:clientId/engagement', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
-  const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
+  const clientId = typeof rawClientId === 'string' ? await resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' });
     return;
@@ -260,7 +271,7 @@ app.get('/api/public/client/:clientId/engagement', async (request: Request, resp
 
 app.post('/api/public/client/:clientId/engagement', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
-  const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
+  const clientId = typeof rawClientId === 'string' ? await resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' });
     return;
@@ -295,7 +306,7 @@ app.post('/api/public/client/:clientId/engagement', async (request: Request, res
 
 app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
-  const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
+  const clientId = typeof rawClientId === 'string' ? await resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' });
     return;
@@ -322,7 +333,7 @@ app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (reque
 
 app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
-  const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
+  const clientId = typeof rawClientId === 'string' ? await resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' });
     return;
@@ -355,7 +366,7 @@ app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (requ
 
 app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request: Request, response: Response) => {
   const rawClientId = request.params.clientId;
-  const clientId = typeof rawClientId === 'string' ? resolvePublicClientId(rawClientId) : null;
+  const clientId = typeof rawClientId === 'string' ? await resolvePublicClientId(rawClientId) : null;
   if (!clientId) {
     response.status(400).json({ message: 'clientId inválido' });
     return;
