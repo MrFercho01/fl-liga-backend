@@ -1,3 +1,42 @@
+// --- Persistencia granular de tokens de acceso de cliente ---
+export const getClientAccessTokensCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  return mongoDb!.collection<ClientAccessTokenEntry>('client_access_tokens');
+};
+
+export const getAllClientAccessTokensFromMongo = async (): Promise<ClientAccessTokenEntry[]> => {
+  const collection = await getClientAccessTokensCollection();
+  return collection.find({}).toArray();
+};
+
+export const getClientAccessTokenByToken = async (token: string): Promise<ClientAccessTokenEntry | null> => {
+  const collection = await getClientAccessTokensCollection();
+  return collection.findOne({ token });
+};
+
+export const getClientAccessTokenById = async (id: string): Promise<ClientAccessTokenEntry | null> => {
+  const collection = await getClientAccessTokensCollection();
+  return collection.findOne({ id });
+};
+
+export const saveClientAccessTokenToMongo = async (entry: ClientAccessTokenEntry) => {
+  const collection = await getClientAccessTokensCollection();
+  await collection.replaceOne({ id: entry.id }, entry, { upsert: true });
+};
+
+export const revokeClientAccessTokenInMongo = async (id: string, revokedAt: string) => {
+  const collection = await getClientAccessTokensCollection();
+  await collection.updateOne({ id }, { $set: { active: false, revokedAt } });
+};
+
+export const renewClientAccessTokenInMongo = async (id: string, expiresAt: string) => {
+  const collection = await getClientAccessTokensCollection();
+  await collection.updateOne(
+    { id },
+    { $set: { expiresAt, active: true }, $unset: { revokedAt: "" } }
+  );
+}
 // --- Persistencia granular de usuarios ---
 export const getUsersCollection = async () => {
   if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
@@ -406,7 +445,7 @@ let videosBucket: GridFSBucket | null = null
 
 const hasMongoConfigured = () => mongoUri.length > 0
 
-const connectMongo = async () => {
+export const connectMongo = async () => {
   if (!hasMongoConfigured()) return null
   if (mongoDb) return mongoDb
   mongoClient = new MongoClient(mongoUri)

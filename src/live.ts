@@ -1,3 +1,31 @@
+import { httpServer } from './server-stub';
+import { Server } from 'socket.io';
+let io: Server | null = null;
+
+/** Inicializa socket.io si no está inicializado */
+function getIO(): Server {
+  if (!io) {
+    io = new Server(httpServer, { cors: { origin: '*' } });
+  }
+  return io;
+}
+
+/**
+ * Emite un evento de actualización en vivo a todos los clientes conectados.
+ * @param event Nombre del evento
+ * @param data  Datos a enviar
+ */
+export function emitLiveUpdate(event: string, data: any) {
+  getIO().emit(event, data);
+}
+
+/**
+ * Broadcast general para notificar cambios en el partido en vivo.
+ * Puede usarse para eventos globales.
+ */
+export function broadcastLive() {
+  getIO().emit('live:broadcast', { timestamp: Date.now() });
+}
 import { v4 as uuidv4 } from 'uuid'
 import type { RegisteredTeam } from './data'
 
