@@ -379,111 +379,6 @@ app.post('/api/admin/leagues/:leagueId/teams', async (request, response) => {
     return
   }
   response.status(201).json({ data: team })
-// --- END DELETE LEAGUE ---
-
-const createPlayerSchema = z.object({
-  name: z.string().min(2),
-  nickname: z.string().min(1),
-  age: z.number().int().min(5).max(80),
-  number: z.number().int().min(1).max(99),
-  position: z.string().min(2),
-  photoUrl: z.string().trim().min(1).optional(),
-  registrationStatus: z.enum(['pending', 'registered']).optional(),
-  replacePlayerId: z.string().uuid().optional(),
-  replacementReason: z.enum(['injury']).optional(),
-})
-
-app.post('/api/admin/teams/:teamId/players', async (request, response) => {
-  const user = await requireAuth(request, response)
-  if (!user) return
-
-  const allTeams = await getAllTeamsFromMongo();
-  const team = allTeams.find((item) => item.id === request.params.teamId)
-  if (!team) {
-    response.status(404).json({ message: 'Equipo no encontrado' })
-    return
-  }
-
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === team.leagueId)
-  if (!league) {
-    response.status(404).json({ message: 'Liga no encontrada para el equipo' })
-    return
-  }
-
-  if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
-    response.status(403).json({ message: 'No tienes acceso a esta liga' })
-    return
-  }
-
-  const parsed = createPlayerSchema.safeParse(request.body)
-  if (!parsed.success) {
-    response.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() })
-    return
-  }
-
-  const category = league.categories.find((item) => item.id === team.categoryId)
-  const maxRegisteredPlayers = Math.max(5, category?.rules.maxRegisteredPlayers ?? 25)
-  const replacingPlayerId = parsed.data.replacePlayerId
-  const replacementReason = parsed.data.replacementReason
-
-  if (replacingPlayerId && replacementReason !== 'injury') {
-    response.status(400).json({ message: 'Para reemplazar una jugadora debes indicar motivo lesión' })
-    return
-  }
-
-  if (replacingPlayerId) {
-    const replacedIndex = team.players.findIndex((item) => item.id === replacingPlayerId)
-    if (replacedIndex === -1) {
-      response.status(404).json({ message: 'La jugadora a reemplazar no existe en el equipo' })
-      return
-    }
-    team.players.splice(replacedIndex, 1)
-  } else if (team.players.length >= maxRegisteredPlayers) {
-    response.status(409).json({ message: `Cupo completo: máximo ${maxRegisteredPlayers} jugadoras. Elimina una o usa reemplazo por lesión.` })
-    return
-  }
-
-  const duplicatedNumber = team.players.some((player) => player.number === parsed.data.number)
-  if (duplicatedNumber) {
-    response.status(409).json({ message: 'El número de camiseta ya existe en el equipo' })
-    return
-  }
-
-  const player: RegisteredPlayer = {
-    id: uuidv4(),
-    name: parsed.data.name.trim(),
-    nickname: parsed.data.nickname.trim(),
-    age: parsed.data.age,
-    number: parsed.data.number,
-    position: parsed.data.position.trim().toUpperCase(),
-    registrationStatus: parsed.data.registrationStatus ?? 'pending',
-    ...(parsed.data.photoUrl ? { photoUrl: parsed.data.photoUrl } : {}),
-  }
-
-  team.players.push(player)
-  try {
-    await saveTeamToMongo(team)
-  } catch (err) {
-    response.status(500).json({ message: 'Error al guardar equipo en MongoDB', error: String(err) })
-    return
-  }
-  const playersOnField = await resolvePlayersOnField(team.leagueId, team.categoryId)
-  const registeredTeamSnapshot: RegisteredTeam = {
-    ...team,
-    players: team.players.filter((item) => item.registrationStatus === 'registered'),
-  }
-  const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
-  if (syncedLive) {
-    // Emitir evento de marcador/minutero en vivo solo en producción
-    if (process.env.NODE_ENV === 'production') {
-      emitLiveUpdate('live:update', buildLiveSnapshot());
-    } else {
-      broadcastLive();
-    }
-  }
-  response.json({ data: team })
-})
 });
 
 const updateTeamSchema = z.object({
@@ -1816,4 +1711,4 @@ const startServer = async () => {
 startServer().catch((error) => {
     console.error('No se pudo iniciar FL Liga API:', error);
     process.exit(1);
-  });
+});
