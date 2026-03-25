@@ -124,6 +124,13 @@ import {
   saveFixtureScheduleToMongo,
   getAllRoundAwardsFromMongo,
   saveRoundAwardToMongo,
+  getMatchEngagement,
+  saveMatchEngagement,
+  getLeagueFixture,
+  getLeaguesByClientId,
+  getClientEngagement,
+  saveClientEngagement,
+  getAllUsersFromMongo,
 } from './data';
 
 // --- SCHEMAS ---
@@ -206,35 +213,144 @@ export const updateLeagueSchema = z.object({
   ).optional(),
   active: z.boolean().optional(),
 });
-// Todas las rutas avanzadas y de administración comentadas para asegurar compilación limpia
-app.get('/api/public/leagues', async (request, response) => {});
-app.get('/api/public/client/:clientId/leagues', async (request, response) => {});
-app.get('/api/public/client/:clientId/engagement', async (request, response) => {});
-app.post('/api/public/client/:clientId/engagement', async (request, response) => {});
-app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (request, response) => {});
-app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (request, response) => {});
-app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request, response) => {});
-app.post('/api/admin/leagues/:leagueId/teams', async (request, response) => {});
-app.post('/api/admin/teams/:teamId/players', async (request, response) => {});
-app.delete('/api/admin/teams/:teamId', async (request, response) => {});
-app.delete('/api/admin/teams/:teamId/players/:playerId', async (request, response) => {});
-app.get('/api/admin/leagues/:leagueId/fixture', async (request, response) => {});
-app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (request, response) => {});
-app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (request, response) => {});
-app.delete('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (request, response) => {});
-app.get('/api/admin/leagues/:leagueId/round-awards', async (request, response) => {});
-app.post('/api/admin/leagues/:leagueId/round-awards', async (request, response) => {});
-app.post('/api/admin/leagues/:leagueId/played-matches', async (request, response) => {});
-app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', async (request, response) => {});
-app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', upload.single('video'), async (request, response) => {});
-app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId', async (request, response) => {});
-app.get('/api/public/videos/:videoId', async (request, response) => {});
-app.post('/api/admin/live/load-match', async (request, response) => {});
-app.post('/api/admin/leagues', async (request, response) => {});
-app.delete('/api/admin/leagues/:leagueId', async (request, response) => {});
-app.post('/api/admin/live/timer', (request, response) => {});
-app.post('/api/admin/live/lineup', (request, response) => {});
-app.post('/api/admin/live/events', (request, response) => {});
+
+// ENDPOINTS FUNCIONALES PARA EL FRONTEND
+
+// --- ENDPOINTS DE AUTENTICACIÓN Y USUARIOS (MongoDB real) ---
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const users = await getAllUsersFromMongo();
+    const user = users.find((u: { email: string; password: string; active: boolean }) => u.email === email && u.password === password && u.active);
+    if (!user) {
+      return res.status(401).json({ message: 'Credenciales inválidas' });
+    }
+    // Token realista: puedes usar JWT aquí si lo deseas
+    res.json({ data: { token: user.id, user } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error en login', error: String(err) });
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const auth = req.headers.authorization;
+    if (!auth) return res.status(401).json({ message: 'No autenticado' });
+    const userId = auth.replace('Bearer ', '');
+    const users = await getAllUsersFromMongo();
+    const user = users.find((u: { id: string; active: boolean }) => u.id === userId && u.active);
+    if (!user) return res.status(401).json({ message: 'Usuario no encontrado' });
+    res.json({ data: user });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener usuario', error: String(err) });
+  }
+});
+
+// --- ENDPOINTS PÚBLICOS Y CLIENTE ---
+app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (req, res) => {
+  try {
+    const { clientId, matchId } = req.params;
+    // Consulta engagement de partido en MongoDB
+    const engagement = await getMatchEngagement(clientId, matchId);
+    res.json({ data: engagement });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener engagement de partido', error: String(err) });
+  }
+});
+
+app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (req, res) => {
+  try {
+    const { clientId, matchId } = req.params;
+    // Guarda engagement de partido en MongoDB
+    const result = await saveMatchEngagement(clientId, matchId, req.body);
+    res.json({ data: result });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al guardar engagement de partido', error: String(err) });
+  }
+});
+
+app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, res) => {
+  try {
+    const { clientId, leagueId } = req.params;
+    // Consulta fixture de liga en MongoDB
+    const fixture = await getLeagueFixture(clientId, leagueId);
+    res.json({ data: fixture });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener fixture', error: String(err) });
+  }
+});
+app.get('/api/public/leagues', async (request, response) => {
+  try {
+    const leagues = await getAllLeaguesFromMongo();
+    response.json({ data: leagues });
+  } catch (err) {
+    response.status(500).json({ message: 'Error al obtener ligas', error: String(err) });
+  }
+});
+
+app.get('/api/public/client/:clientId/leagues', async (request, response) => {
+  try {
+    const { clientId } = request.params;
+    const leagues = await getLeaguesByClientId(clientId);
+    response.json({ data: leagues });
+  } catch (err) {
+    response.status(500).json({ message: 'Error al obtener ligas del cliente', error: String(err) });
+  }
+});
+
+app.get('/api/public/client/:clientId/engagement', async (request, response) => {
+  try {
+    const { clientId } = request.params;
+    const engagement = await getClientEngagement(clientId);
+    response.json({ data: engagement });
+  } catch (err) {
+    response.status(500).json({ message: 'Error al obtener engagement', error: String(err) });
+  }
+});
+
+app.post('/api/public/client/:clientId/engagement', async (request, response) => {
+  try {
+    const { clientId } = request.params;
+    const result = await saveClientEngagement(clientId, request.body);
+    response.json({ data: result });
+  } catch (err) {
+    response.status(500).json({ message: 'Error al guardar engagement', error: String(err) });
+  }
+});
+
+app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (request, response) => {
+  try {
+    const { clientId, matchId } = request.params;
+    const engagement = await getMatchEngagement(clientId, matchId);
+    response.json({ data: engagement });
+  } catch (err) {
+    response.status(500).json({ message: 'Error al obtener engagement de partido', error: String(err) });
+  }
+});
+
+app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (request, response) => {
+  try {
+    const { clientId, matchId } = request.params;
+    const result = await saveMatchEngagement(clientId, matchId, request.body);
+    response.json({ data: result });
+  } catch (err) {
+    response.status(500).json({ message: 'Error al guardar engagement de partido', error: String(err) });
+  }
+});
+
+app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request, response) => {
+  try {
+    const { clientId, leagueId } = request.params;
+    const fixture = await getLeagueFixture(clientId, leagueId);
+    response.json({ data: fixture });
+  } catch (err) {
+    response.status(500).json({ message: 'Error al obtener fixture', error: String(err) });
+  }
+});
+
+// --- ENDPOINTS DE ADMINISTRACIÓN Y VIDEOS (MongoDB real) ---
+// Aquí debes asegurarte de que cada endpoint de administración (equipos, ligas, videos, etc.) use funciones de acceso a MongoDB y nunca devuelva datos simulados ni vacíos.
+// Ejemplo para equipos ya implementado abajo. Repite el patrón para el resto de recursos.
 
 app.get('/api/public/client/:clientId/engagement', async (request: express.Request, response: express.Response) => {
   const clientId = request.params.clientId;
@@ -293,12 +409,7 @@ app.post('/api/public/client/:clientId/engagement', async (request: express.Requ
   await mongo.close();
 });
 
-/*
-// Rutas avanzadas comentadas para compilación limpia
-app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (request, response) => {});
-app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (request, response) => {});
-app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request, response) => {});
-*/
+
 
 app.post('/api/admin/leagues/:leagueId/teams', async (request, response) => {
   const user = await requireAuth(request, response)

@@ -1,3 +1,68 @@
+// --- Engagement de partidos ---
+export const getMatchEngagement = async (clientId: string, matchId: string) => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  const collection = mongoDb!.collection<{ clientId: string; matchId: string; likes: number; visits: number; updatedAt: string }>('match_engagement');
+  const found = await collection.findOne({ clientId, matchId });
+  if (found) return found;
+  const newEngagement = { clientId, matchId, likes: 0, visits: 0, updatedAt: new Date().toISOString() };
+  await collection.insertOne(newEngagement);
+  return newEngagement;
+};
+
+export const saveMatchEngagement = async (clientId: string, matchId: string, data: { likes?: number; visits?: number }) => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  const collection = mongoDb!.collection('match_engagement');
+  const update: any = { updatedAt: new Date().toISOString() };
+  if (typeof data.likes === 'number') update.likes = data.likes;
+  if (typeof data.visits === 'number') update.visits = data.visits;
+  await collection.updateOne({ clientId, matchId }, { $set: update }, { upsert: true });
+  return await collection.findOne({ clientId, matchId });
+};
+
+// --- Fixture de liga por cliente ---
+export const getLeagueFixture = async (clientId: string, leagueId: string) => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  // Busca todos los schedules de la liga para el cliente
+  const collection = mongoDb!.collection('fixture_schedule');
+  const fixtures = await collection.find({ leagueId }).toArray();
+  return fixtures;
+};
+
+// --- Ligas por cliente ---
+export const getLeaguesByClientId = async (clientId: string) => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  // Busca ligas donde el ownerUserId coincida con el clientId
+  const collection = mongoDb!.collection('leagues');
+  const leagues = await collection.find({ ownerUserId: clientId }).toArray();
+  return leagues;
+};
+
+// --- Engagement general de cliente ---
+export const getClientEngagement = async (clientId: string) => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  const collection = mongoDb!.collection<{ clientId: string; visits: number; likes: number; updatedAt: string }>('public_engagement');
+  const found = await collection.findOne({ clientId });
+  if (found) return found;
+  const newEngagement = { clientId, visits: 0, likes: 0, updatedAt: new Date().toISOString() };
+  await collection.insertOne(newEngagement);
+  return newEngagement;
+};
+
+export const saveClientEngagement = async (clientId: string, data: { visits?: number; likes?: number }) => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  const collection = mongoDb!.collection('public_engagement');
+  const update: any = { updatedAt: new Date().toISOString() };
+  if (typeof data.visits === 'number') update.visits = data.visits;
+  if (typeof data.likes === 'number') update.likes = data.likes;
+  await collection.updateOne({ clientId }, { $set: update }, { upsert: true });
+  return await collection.findOne({ clientId });
+};
 // --- Persistencia granular de tokens de acceso de cliente ---
 export const getClientAccessTokensCollection = async () => {
   if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
