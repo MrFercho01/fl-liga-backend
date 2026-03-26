@@ -3,6 +3,8 @@ import http from 'http';
 import express from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 
+
+// Instancia única de Express para toda la app
 const app = express();
 export { app };
 
@@ -27,3 +29,5 @@ export const io = new SocketIOServer(httpServer, {
 io.on('connection', (socket) => {
 	console.log('Socket conectado:', socket.id);
 });
+
+// El arranque del servidor debe hacerse desde index.ts, no aquí, para evitar problemas de importación circular.

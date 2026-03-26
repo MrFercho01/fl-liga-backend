@@ -1,3 +1,5 @@
+// Cargar variables de entorno desde .env
+import 'dotenv/config';
 /**
  * Inicializa la conexión y colecciones de MongoDB. Llama a connectMongo si es necesario.
  */
@@ -64,8 +66,25 @@ function normalizeTechnicalStaff(rawStaff: any) {
 
 
 
+import { app } from './server-stub';
+
+// Middleware CORS robusto para Render y desarrollo local
+import cors from 'cors';
 import express from 'express';
-const app = express();
+app.use(cors({
+  origin: [
+    'http://localhost:5173', // FE local
+    'https://fl-liga-frontend.vercel.app', // FE producción (ajusta si tu dominio es otro)
+    'https://fl-liga-frontend.onrender.com', // FE en Render (si aplica)
+    '*', // Permitir todo (solo para pruebas, quita en producción)
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+// Middleware para parsear JSON
+app.use(express.json());
 
 import type { RegisteredTeam, RegisteredPlayer } from './data';
 import { ensurePublicEngagement } from './engagement';
@@ -80,8 +99,7 @@ import {
 } from './data';
 // Helper para asegurar engagement público
 
-import cors from 'cors';
-import http from 'http';
+// ...existing code...
 // import { z } from 'zod'; // Eliminado duplicado
 import { randomBytes } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
@@ -96,7 +114,7 @@ import {
   buildLiveSnapshot,
   loadMatchForLive
 } from './live';
-import { httpServer, port } from './server-stub';
+
 
 // Configuración de multer para upload de videos
 const upload = multer({
@@ -221,7 +239,12 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const users = await getAllUsersFromMongo();
-    const user = users.find((u: { email: string; password: string; active: boolean }) => u.email === email && u.password === password && u.active);
+    // Permitir login por email o por nombre de usuario (name)
+    const user = users.find((u: any) =>
+      (u.email === email || u.name === email) &&
+      u.password === password &&
+      u.active === true
+    );
     if (!user) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
@@ -1088,7 +1111,7 @@ app.patch('/api/admin/leagues/:leagueId', async (request, response) => {
   await saveLeagueToMongo(nextLeague);
   response.json({ data: nextLeague });
 });
-// --- Bloque duplicado/suelto eliminado para evitar errores de compilación ---
+
 
 const playedMatchSchema = z.object({
   matchId: z.string().min(3),
@@ -1807,6 +1830,11 @@ app.post('/api/admin/live/events', (request, response) => {
 
 // En producción, los eventos live:update se emiten por socket.io
 // En desarrollo, se mantiene el stub/broadcastLive local
+
+
+
+// Importar httpServer y port justo antes de arrancar el servidor para evitar duplicados
+import { httpServer, port } from './server-stub';
 
 const startServer = async () => {
   await initializeDataStore();
