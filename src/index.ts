@@ -856,16 +856,22 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const users = await getAllUsersFromMongo();
-    // Permitir login por email o por nombre de usuario (name)
-    const user = users.find((u: any) =>
-      (u.email === email || u.name === email) &&
-      u.password === password &&
-      u.active === true
-    );
+    // Normalizar email y password para comparación insensible
+    const inputEmail = (email || '').trim().toLowerCase();
+    const inputPassword = (password || '').trim();
+    const user = users.find((u: any) => {
+      const dbEmail = (u.email || '').trim().toLowerCase();
+      const dbName = (u.name || '').trim().toLowerCase();
+      const dbPassword = (u.password || '').trim();
+      return (
+        (dbEmail === inputEmail || dbName === inputEmail) &&
+        dbPassword === inputPassword &&
+        u.active === true
+      );
+    });
     if (!user) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
-    // Token realista: puedes usar JWT aquí si lo deseas
     res.json({ data: { token: user.id, user } });
   } catch (err) {
     res.status(500).json({ message: 'Error en login', error: String(err) });
