@@ -557,9 +557,10 @@ app.post('/api/auth/client/reset-password', async (req, res) => {
     if (tokenDoc.expiresAt && new Date(tokenDoc.expiresAt) < new Date()) {
       return res.status(401).json({ message: 'Token vencido' });
     }
-    // Buscar usuario por email
+    // Buscar usuario por email (insensible a mayúsculas/minúsculas y espacios)
     const users = await getAllUsersFromMongo();
-    const user = users.find((u) => u.email === email && u.id === tokenDoc.clientUserId && u.active);
+    const inputEmail = (email || '').trim().toLowerCase();
+    const user = users.find((u) => (u.email || '').trim().toLowerCase() === inputEmail && u.id === tokenDoc.clientUserId && u.active);
     if (!user) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -854,17 +855,17 @@ export const updateLeagueSchema = z.object({
 // --- ENDPOINTS DE AUTENTICACIÓN Y USUARIOS (MongoDB real) ---
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { identifier, email, password, accessToken } = req.body;
     const users = await getAllUsersFromMongo();
-    // Normalizar email y password para comparación insensible
-    const inputEmail = (email || '').trim().toLowerCase();
+    // Permitir login por identifier (email o name) o email
+    const inputId = (identifier || email || '').trim().toLowerCase();
     const inputPassword = (password || '').trim();
     const user = users.find((u: any) => {
       const dbEmail = (u.email || '').trim().toLowerCase();
       const dbName = (u.name || '').trim().toLowerCase();
       const dbPassword = (u.password || '').trim();
       return (
-        (dbEmail === inputEmail || dbName === inputEmail) &&
+        (dbEmail === inputId || dbName === inputId) &&
         dbPassword === inputPassword &&
         u.active === true
       );
