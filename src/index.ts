@@ -115,8 +115,9 @@ app.post('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
 app.get('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
   try {
     const { leagueId } = req.params;
+    const { categoryId } = req.query;
     const matches = await getAllPlayedMatchesFromMongo();
-    const filtered = matches.filter((m) => m.leagueId === leagueId);
+    const filtered = matches.filter((m) => m.leagueId === leagueId && (!categoryId || m.categoryId === categoryId));
     res.json({ data: filtered });
   } catch (err) {
     res.status(500).json({ message: 'Error al obtener partidos jugados', error: String(err) });
@@ -176,8 +177,9 @@ app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, r
 app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (req, res) => {
   try {
     const { leagueId } = req.params;
+    const { categoryId } = req.query;
     const schedules = await getAllFixtureSchedulesFromMongo();
-    const filtered = schedules.filter((s) => s.leagueId === leagueId);
+    const filtered = schedules.filter((s) => s.leagueId === leagueId && (!categoryId || s.categoryId === categoryId));
     res.json({ data: filtered });
   } catch (err) {
     res.status(500).json({ message: 'Error al obtener fixture schedule', error: String(err) });
