@@ -1,3 +1,4 @@
+import { app } from './server-stub';
 import { getLiveMatchById, saveLiveMatchToMongo } from './liveMatchData';
 
 // Registrar evento en vivo (persistente, multi-partido)
@@ -682,7 +683,7 @@ function normalizeTechnicalStaff(rawStaff: any) {
 
 
 
-import { app } from './server-stub';
+
 
 // Middleware CORS robusto para Render y desarrollo local
 import cors from 'cors';
