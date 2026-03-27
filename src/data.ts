@@ -353,6 +353,7 @@ export interface MatchHighlightVideo {
   id: string
   name: string
   url: string
+  leagueId: string;
 }
 
 export interface PlayedMatchPlayerStats {
@@ -505,7 +506,7 @@ export const SUPER_ADMIN_USER_ID = 'super-admin'
 const mongoUri = process.env.MONGODB_URI?.trim() || ''
 const mongoDbName = process.env.MONGODB_DB_NAME?.trim() || 'fl_liga'
 let mongoClient: MongoClient | null = null
-let mongoDb: Db | null = null
+export let mongoDb: Db | null = null
 let videosBucket: GridFSBucket | null = null
 
 const hasMongoConfigured = () => mongoUri.length > 0

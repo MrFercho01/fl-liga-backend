@@ -1,3 +1,619 @@
+import { getLiveMatchById, saveLiveMatchToMongo } from './liveMatchData';
+
+// Registrar evento en vivo (persistente, multi-partido)
+app.post('/api/admin/live/events', async (req, res) => {
+  try {
+    const { matchId, event } = req.body;
+    if (!matchId || !event) return res.status(400).json({ message: 'Faltan datos: matchId y event' });
+    const match = await getLiveMatchById(matchId);
+    if (!match) return res.status(404).json({ message: 'Partido en vivo no encontrado' });
+    match.events = match.events || [];
+    match.events.push(event);
+    await saveLiveMatchToMongo(match);
+    res.json({ data: { status: 'event-registered', event } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al registrar evento', error: String(err) });
+  }
+});
+
+// Guardar alineación en vivo (persistente, multi-partido)
+app.post('/api/admin/live/lineup', async (req, res) => {
+  try {
+    const { matchId, homeTeam, awayTeam } = req.body;
+    if (!matchId || !homeTeam || !awayTeam) return res.status(400).json({ message: 'Faltan datos: matchId, homeTeam, awayTeam' });
+    const match = await getLiveMatchById(matchId);
+    if (!match) return res.status(404).json({ message: 'Partido en vivo no encontrado' });
+    match.homeTeam = homeTeam;
+    match.awayTeam = awayTeam;
+    await saveLiveMatchToMongo(match);
+    res.json({ data: { status: 'lineup-saved', homeTeam, awayTeam } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al guardar alineación', error: String(err) });
+  }
+});
+
+// Actualizar configuración en vivo (persistente, multi-partido)
+app.patch('/api/admin/live/settings', async (req, res) => {
+  try {
+    const { matchId, settings } = req.body;
+    if (!matchId || !settings) return res.status(400).json({ message: 'Faltan datos: matchId y settings' });
+    const match = await getLiveMatchById(matchId);
+    if (!match) return res.status(404).json({ message: 'Partido en vivo no encontrado' });
+    match.settings = settings;
+    await saveLiveMatchToMongo(match);
+    res.json({ data: { status: 'settings-updated', settings } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al actualizar configuración', error: String(err) });
+  }
+});
+
+// Actualizar timer del partido en vivo (persistente, multi-partido)
+app.post('/api/admin/live/timer', async (req, res) => {
+  try {
+    const { matchId, timer } = req.body;
+    if (!matchId || !timer) return res.status(400).json({ message: 'Faltan datos: matchId y timer' });
+    const match = await getLiveMatchById(matchId);
+    if (!match) return res.status(404).json({ message: 'Partido en vivo no encontrado' });
+    match.timer = timer;
+    await saveLiveMatchToMongo(match);
+    res.json({ data: { status: 'timer-updated', timer } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al actualizar timer', error: String(err) });
+  }
+});
+// Obtener partido en vivo real desde MongoDB (multi-partido)
+app.get('/api/live/match', async (req, res) => {
+  try {
+    const { matchId } = req.query;
+    if (!matchId) return res.status(400).json({ message: 'Falta matchId' });
+    const match = await getLiveMatchById(String(matchId));
+    if (!match) return res.status(404).json({ message: 'No hay partido en vivo' });
+    res.json({ data: match });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener partido en vivo', error: String(err) });
+  }
+});
+import { getAllHighlightVideosFromMongo } from './data';
+// Guardar video destacado
+app.post('/api/admin/leagues/:leagueId/highlight-videos', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const video = { ...req.body, leagueId };
+    if (!video.id || !video.name || !video.url || !video.leagueId) {
+      return res.status(400).json({ message: 'Faltan campos requeridos para el video destacado' });
+    }
+    await saveHighlightVideoToMongo(video);
+    res.json({ data: video });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al guardar video destacado', error: String(err) });
+  }
+});
+// Obtener videos destacados de una liga
+app.get('/api/admin/leagues/:leagueId/highlight-videos', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const videos = await getAllHighlightVideosFromMongo();
+    const filtered = videos.filter((v) => v.leagueId === leagueId);
+    res.json({ data: filtered });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener videos destacados', error: String(err) });
+  }
+});
+// Guardar partido jugado
+app.post('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const match = { ...req.body, leagueId };
+    await savePlayedMatchToMongo(match);
+    res.json({ data: match });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al guardar partido jugado', error: String(err) });
+  }
+});
+// Obtener partidos jugados de una liga
+app.get('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const matches = await getAllPlayedMatchesFromMongo();
+    const filtered = matches.filter((m) => m.leagueId === leagueId);
+    res.json({ data: filtered });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener partidos jugados', error: String(err) });
+  }
+});
+// Guardar premio de ronda
+app.post('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const { categoryId, round, ...rest } = req.body;
+    if (!categoryId || typeof round !== 'number') return res.status(400).json({ message: 'Faltan datos' });
+    const entry = { leagueId, categoryId, round, ...rest };
+    await saveRoundAwardToMongo(entry);
+    res.json({ data: entry });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al guardar premio de ronda', error: String(err) });
+  }
+});
+// Obtener premios de ronda de una liga
+app.get('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const awards = await getAllRoundAwardsFromMongo();
+    const filtered = awards.filter((a) => a.leagueId === leagueId);
+    res.json({ data: filtered });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener premios de ronda', error: String(err) });
+  }
+});
+// Eliminar schedule de un partido
+app.delete('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, res) => {
+  try {
+    const { leagueId, matchId } = req.params;
+    const { categoryId } = req.query;
+    if (!categoryId) return res.status(400).json({ message: 'Falta categoryId' });
+    const collection = await getFixtureScheduleCollection();
+    await collection.deleteOne({ leagueId, matchId, categoryId });
+    res.json({ data: { ok: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al eliminar schedule', error: String(err) });
+  }
+});
+// Guardar schedule de un partido
+app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, res) => {
+  try {
+    const { leagueId, matchId } = req.params;
+    const { categoryId, ...rest } = req.body;
+    if (!categoryId) return res.status(400).json({ message: 'Falta categoryId' });
+    const entry = { leagueId, matchId, categoryId, ...rest };
+    await saveFixtureScheduleToMongo(entry);
+    res.json({ data: entry });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al guardar schedule', error: String(err) });
+  }
+});
+// Schedule de una liga para administración
+app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const schedules = await getAllFixtureSchedulesFromMongo();
+    const filtered = schedules.filter((s) => s.leagueId === leagueId);
+    res.json({ data: filtered });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener fixture schedule', error: String(err) });
+  }
+});
+// Fixture de una liga para administración
+app.get('/api/admin/leagues/:leagueId/fixture', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const fixture = await getLeagueFixture('', leagueId);
+    res.json({ data: fixture });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener fixture admin', error: String(err) });
+  }
+});
+// Eliminar jugador de un equipo
+app.delete('/api/admin/teams/:teamId/players/:playerId', async (req, res) => {
+  try {
+    const { teamId, playerId } = req.params;
+    const teams = await getAllTeamsFromMongo();
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) return res.status(404).json({ message: 'Equipo no encontrado' });
+    const idx = team.players.findIndex((p) => p.id === playerId);
+    if (idx === -1) return res.status(404).json({ message: 'Jugador no encontrado' });
+    team.players.splice(idx, 1);
+    await saveTeamToMongo(team);
+    res.json({ data: { ok: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al eliminar jugador', error: String(err) });
+  }
+});
+// Agregar jugador a un equipo
+app.post('/api/admin/teams/:teamId/players', async (req, res) => {
+  try {
+    const { teamId } = req.params;
+    const { name, nickname, age, number, position } = req.body;
+    if (!name || !nickname || !age || !number || !position) {
+      return res.status(400).json({ message: 'Faltan campos requeridos' });
+    }
+    const teams = await getAllTeamsFromMongo();
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) return res.status(404).json({ message: 'Equipo no encontrado' });
+    const newPlayer = {
+      id: (Math.random().toString(36).slice(2) + Date.now()),
+      name,
+      nickname,
+      age,
+      number,
+      position,
+      registrationStatus: "registered" as const,
+    };
+    team.players.push(newPlayer);
+    await saveTeamToMongo(team);
+    res.json({ data: newPlayer });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al agregar jugador', error: String(err) });
+  }
+});
+// Eliminar un equipo
+app.delete('/api/admin/teams/:teamId', async (req, res) => {
+  try {
+    const { teamId } = req.params;
+    const teams = await getAllTeamsFromMongo();
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) return res.status(404).json({ message: 'Equipo no encontrado' });
+    const collection = await getTeamsCollection();
+    await collection.deleteOne({ id: teamId });
+    res.json({ data: { ok: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al eliminar equipo', error: String(err) });
+  }
+});
+// Listar equipos de una liga y categoría
+app.get('/api/admin/leagues/:leagueId/teams', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const { categoryId } = req.query;
+    const teams = await getAllTeamsFromMongo();
+    const filtered = teams.filter((t) => t.leagueId === leagueId && t.categoryId === categoryId);
+    res.json({ data: filtered });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener equipos', error: String(err) });
+  }
+});
+// Crear equipo en una liga
+app.post('/api/admin/leagues/:leagueId/teams', async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const { name, categoryId } = req.body;
+    if (!name || !categoryId) {
+      return res.status(400).json({ message: 'Faltan campos requeridos' });
+    }
+    const newTeam = {
+      id: (Math.random().toString(36).slice(2) + Date.now()),
+      leagueId,
+      categoryId,
+      name,
+      active: true,
+      players: [],
+    };
+    await saveTeamToMongo(newTeam);
+    res.json({ data: newTeam });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al crear equipo', error: String(err) });
+  }
+});
+// Fixture público de una liga
+app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, res) => {
+  try {
+    const { clientId, leagueId } = req.params;
+    const fixture = await getLeagueFixture(clientId, leagueId);
+    res.json({ data: fixture });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener fixture público', error: String(err) });
+  }
+});
+// Actualizar engagement de un partido público
+app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (req, res) => {
+  try {
+    const { clientId, matchId } = req.params;
+    const { likes, visits } = req.body;
+    const engagement = await getMatchEngagement(clientId, matchId);
+    if (typeof likes === 'number') engagement.likes = likes;
+    if (typeof visits === 'number') engagement.visits = visits;
+    const updated = await saveMatchEngagement(clientId, matchId, { likes: engagement.likes, visits: engagement.visits });
+    res.json({ data: updated });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al actualizar engagement de partido', error: String(err) });
+  }
+});
+// Engagement de un partido público
+app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (req, res) => {
+  try {
+    const { clientId, matchId } = req.params;
+    const engagement = await getMatchEngagement(clientId, matchId);
+    res.json({ data: engagement });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener engagement de partido', error: String(err) });
+  }
+});
+// Actualizar engagement público de un cliente
+app.post('/api/public/client/:clientId/engagement', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const { action, delta } = req.body;
+    const engagement = await getClientEngagement(clientId);
+    if (!engagement) return res.status(404).json({ message: 'Engagement no encontrado' });
+    if (action === 'visit') {
+      engagement.visits += delta || 1;
+    } else if (action === 'like') {
+      engagement.likes += delta || 1;
+    }
+    const updated = await saveClientEngagement(clientId, { visits: engagement.visits, likes: engagement.likes });
+    res.json({ data: updated });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al actualizar engagement público', error: String(err) });
+  }
+});
+// Engagement público de un cliente
+app.get('/api/public/client/:clientId/engagement', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const engagement = await getClientEngagement(clientId);
+    res.json({ data: engagement });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener engagement público', error: String(err) });
+  }
+});
+// Listar ligas públicas de un cliente
+app.get('/api/public/client/:clientId/leagues', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const leagues = await getLeaguesByClientId(clientId);
+    res.json({ data: leagues });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener ligas del cliente', error: String(err) });
+  }
+});
+// Listar todas las ligas públicas
+app.get('/api/public/leagues', async (req, res) => {
+  try {
+    const leagues = await getAllLeaguesFromMongo();
+    res.json({ data: leagues });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener ligas públicas', error: String(err) });
+  }
+});
+// Revocar un token de acceso de cliente
+app.patch('/api/admin/client-access-tokens/:tokenId/revoke', async (req, res) => {
+  try {
+    const { tokenId } = req.params;
+    const revokedAt = new Date().toISOString();
+    await revokeClientAccessTokenInMongo(tokenId, revokedAt);
+    res.json({ data: { id: tokenId, active: false, revokedAt } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al revocar token', error: String(err) });
+  }
+});
+// Renovar expiración de un token de acceso de cliente
+app.patch('/api/admin/client-access-tokens/:tokenId/renew', async (req, res) => {
+  try {
+    const { tokenId } = req.params;
+    const { expiresAt } = req.body;
+    if (!expiresAt) {
+      return res.status(400).json({ message: 'Falta expiresAt' });
+    }
+    await renewClientAccessTokenInMongo(tokenId, expiresAt);
+    res.json({ data: { id: tokenId, expiresAt, active: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al renovar token', error: String(err) });
+  }
+});
+// Crear un nuevo token de acceso de cliente
+app.post('/api/admin/client-access-tokens', async (req, res) => {
+  try {
+    const { clientUserId, expiresAt } = req.body;
+    if (!clientUserId || !expiresAt) {
+      return res.status(400).json({ message: 'Faltan campos requeridos' });
+    }
+    // Generar token y contraseña temporal
+    const token = uuidv4();
+    const temporaryPassword = Math.random().toString(36).slice(2, 10);
+    const entry = {
+      id: uuidv4(),
+      clientUserId,
+      token,
+      expiresAt,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
+    await saveClientAccessTokenToMongo(entry);
+    // Opcional: actualizar usuario con la contraseña temporal
+    const users = await getAllUsersFromMongo();
+    const user = users.find((u) => u.id === clientUserId);
+    if (user) {
+      user.password = temporaryPassword;
+      user.mustChangePassword = true;
+      await saveUserToMongo(user);
+    }
+    res.json({ data: { ...entry, temporaryPassword } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al crear token de cliente', error: String(err) });
+  }
+});
+// Listar todos los tokens de acceso de cliente
+app.get('/api/admin/client-access-tokens', async (req, res) => {
+  try {
+    const tokens = await getAllClientAccessTokensFromMongo();
+    res.json({ data: tokens });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener tokens de cliente', error: String(err) });
+  }
+});
+// Obtener usuario client_admin específico
+app.get('/api/admin/client-users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const users = await getAllUsersFromMongo();
+    const user = users.find((u) => u.id === userId && u.role === 'client_admin');
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    res.json({ data: user });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener usuario', error: String(err) });
+  }
+});
+// Listar todos los usuarios client_admin
+app.get('/api/admin/client-users', async (req, res) => {
+  try {
+    const users = await getAllUsersFromMongo();
+    const clientUsers = users.filter((u) => u.role === 'client_admin');
+    res.json({ data: clientUsers });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener client users', error: String(err) });
+  }
+});
+// Regenerar contraseña temporal para client_admin
+app.post('/api/admin/client-users/:userId/reset-temporary-password', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const users = await getAllUsersFromMongo();
+    const user = users.find((u) => u.id === userId && u.role === 'client_admin');
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    // Generar nueva contraseña temporal
+    const temporaryPassword = Math.random().toString(36).slice(2, 10);
+    user.password = temporaryPassword;
+    user.mustChangePassword = true;
+    await saveUserToMongo(user);
+    res.json({ data: { id: user.id, name: user.name, temporaryPassword, active: user.active } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al regenerar contraseña temporal', error: String(err) });
+  }
+});
+// Actualizar usuario client_admin (asegura compatibilidad FE)
+app.patch('/api/admin/client-users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { name, organizationName, email, active } = req.body;
+    const users = await getAllUsersFromMongo();
+    const user = users.find((u) => u.id === userId && u.role === 'client_admin');
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    if (name !== undefined) user.name = name;
+    if (organizationName !== undefined) user.organizationName = organizationName;
+    if (email !== undefined) user.email = email;
+    if (typeof active === 'boolean') user.active = active;
+    await saveUserToMongo(user);
+    res.json({ data: {
+      id: user.id,
+      name: user.name,
+      organizationName: user.organizationName,
+      email: user.email,
+      role: user.role,
+      active: user.active
+    }});
+  } catch (err) {
+    res.status(500).json({ message: 'Error al actualizar cliente admin', error: String(err) });
+  }
+});
+// Crear usuario client_admin
+app.post('/api/admin/client-users', async (req, res) => {
+  try {
+    const { name, organizationName, email, password } = req.body;
+    if (!name || !organizationName || !email) {
+      return res.status(400).json({ message: 'Faltan campos requeridos' });
+    }
+    const users = await getAllUsersFromMongo();
+    if (users.some((u) => u.email === email)) {
+      return res.status(409).json({ message: 'El email ya está registrado' });
+    }
+    const newUser: AppUser = {
+      id: (Math.random().toString(36).slice(2) + Date.now()),
+      name,
+      organizationName,
+      email,
+      password: password || '',
+      role: 'client_admin',
+      active: true,
+    };
+    await saveUserToMongo(newUser);
+    res.json({ data: newUser });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al crear cliente admin', error: String(err) });
+  }
+});
+// Obtener todos los usuarios admin (super_admin y client_admin)
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const users = await getAllUsersFromMongo();
+    // El frontend espera un array de usuarios con sus ligas (puedes ajustar si necesitas incluir ligas)
+    res.json({ data: users });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener usuarios', error: String(err) });
+  }
+});
+// Logout de usuario (simple, solo responde ok)
+app.post('/api/auth/logout', async (req, res) => {
+  // El frontend solo espera confirmación, no es necesario invalidar token en este flujo
+  res.json({ data: { ok: true } });
+});
+// Reset de password de cliente con accessToken
+app.post('/api/auth/client/reset-password', async (req, res) => {
+  try {
+    const { accessToken, email, password, currentPassword } = req.body;
+    if (!accessToken || !email || !password) {
+      return res.status(400).json({ message: 'Faltan campos requeridos' });
+    }
+    // Validar accessToken
+    const tokenDoc = await getClientAccessTokenByToken(accessToken);
+    if (!tokenDoc || !tokenDoc.active) {
+      return res.status(401).json({ message: 'Token inválido o revocado' });
+    }
+    if (tokenDoc.expiresAt && new Date(tokenDoc.expiresAt) < new Date()) {
+      return res.status(401).json({ message: 'Token vencido' });
+    }
+    // Buscar usuario por email
+    const users = await getAllUsersFromMongo();
+    const user = users.find((u) => u.email === email && u.id === tokenDoc.clientUserId && u.active);
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    // Si se envía currentPassword, validar que coincida
+    if (currentPassword && user.password !== currentPassword) {
+      return res.status(401).json({ message: 'Contraseña actual incorrecta' });
+    }
+    // Actualizar password
+    user.password = password;
+    await saveUserToMongo(user);
+    res.json({ data: { ok: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al restablecer contraseña', error: String(err) });
+  }
+});
+// Registro de cliente con accessToken
+import { saveUserToMongo } from './saveUserToMongo';
+import type { AppUser } from './data';
+app.post('/api/auth/client/register', async (req, res) => {
+  try {
+    const { accessToken, fullName, organizationName, email, password } = req.body;
+    if (!accessToken || !fullName || !organizationName || !email || !password) {
+      return res.status(400).json({ message: 'Faltan campos requeridos' });
+    }
+    // Validar accessToken
+    const tokenDoc = await getClientAccessTokenByToken(accessToken);
+    if (!tokenDoc || !tokenDoc.active) {
+      return res.status(401).json({ message: 'Token inválido o revocado' });
+    }
+    if (tokenDoc.expiresAt && new Date(tokenDoc.expiresAt) < new Date()) {
+      return res.status(401).json({ message: 'Token vencido' });
+    }
+    // Verificar que el usuario no exista
+    const users = await getAllUsersFromMongo();
+    if (users.some((u: AppUser) => u.email === email)) {
+      return res.status(409).json({ message: 'El email ya está registrado' });
+    }
+    // Crear usuario cliente
+    const newUser: AppUser = {
+      id: tokenDoc.clientUserId, // Asociar el id del token
+      name: fullName,
+      organizationName,
+      email,
+      password,
+      role: 'client_admin',
+      active: true,
+    };
+    // Guardar usuario en MongoDB
+    await saveUserToMongo(newUser);
+    // Devolver token y datos del usuario
+    res.json({ data: { token: newUser.id, user: newUser } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al registrar cliente', error: String(err) });
+  }
+});
 // Cargar variables de entorno desde .env
 import 'dotenv/config';
 /**
@@ -252,6 +868,40 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ data: { token: user.id, user } });
   } catch (err) {
     res.status(500).json({ message: 'Error en login', error: String(err) });
+  }
+});
+
+// Validar accessToken de cliente
+app.post('/api/auth/client-token/validate', async (req, res) => {
+  try {
+    const { accessToken } = req.body;
+    if (!accessToken) {
+      return res.status(400).json({ message: 'Falta accessToken' });
+    }
+    // Buscar el token en MongoDB
+    const tokenDoc = await getClientAccessTokenByToken(accessToken);
+    if (!tokenDoc || !tokenDoc.active) {
+      return res.status(401).json({ message: 'Token inválido o revocado' });
+    }
+    // Validar expiración
+    if (tokenDoc.expiresAt && new Date(tokenDoc.expiresAt) < new Date()) {
+      return res.status(401).json({ message: 'Token vencido' });
+    }
+    // Buscar usuario cliente asociado
+    const users = await getAllUsersFromMongo();
+    const client = users.find((u: any) => u.id === tokenDoc.clientUserId && u.active);
+    if (!client) {
+      return res.status(404).json({ message: 'Cliente no encontrado' });
+    }
+    res.json({ data: { client: {
+      id: client.id,
+      name: client.name,
+      organizationName: client.organizationName,
+      email: client.email,
+      role: client.role,
+    }, expiresAt: tokenDoc.expiresAt } });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al validar token', error: String(err) });
   }
 });
 
@@ -1280,7 +1930,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches', async (request, response
       ...(event.substitutionInPlayerName ? { substitutionInPlayerName: event.substitutionInPlayerName } : {}),
       ...(event.staffRole ? { staffRole: event.staffRole } : {}),
     })),
-    highlightVideos: parsed.data.highlightVideos,
+    highlightVideos: (parsed.data.highlightVideos || []).map((v: any) => ({ ...v, leagueId: parsed.data.leagueId })),
     playedAt: parsed.data.playedAt,
   }
 
@@ -1344,6 +1994,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', async (r
     id: uuidv4(),
     name: parsed.data.name,
     url: parsed.data.url,
+    leagueId: league.id,
   }
   await saveHighlightVideoToMongo(video)
   response.json({ data: { ...match, highlightVideos: [...(match.highlightVideos || []), video] } })
@@ -1421,6 +2072,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
       id: uuidv4(),
       name: finalName,
       url: buildPublicVideoUrl(request, fileId),
+      leagueId: league.id,
     }
     await saveHighlightVideoToMongo(video)
     response.json({ data: { ...match, highlightVideos: [...(match.highlightVideos || []), video] } })
