@@ -74,7 +74,7 @@ app.get('/api/live/match', async (req, res) => {
     res.status(500).json({ message: 'Error al obtener partido en vivo', error: String(err) });
   }
 });
-import { getAllHighlightVideosFromMongo } from './data';
+import { getAllHighlightVideosFromMongo, getUsersCollection } from './data';
 // Guardar video destacado
 app.post('/api/admin/leagues/:leagueId/highlight-videos', async (req, res) => {
   try {
@@ -414,7 +414,28 @@ app.get('/api/public/client/:clientId/engagement', async (req, res) => {
 app.get('/api/public/client/:clientId/leagues', async (req, res) => {
   try {
     const { clientId } = req.params;
-    const leagues = await getLeaguesByClientId(clientId);
+    // Restaurar lógica: aceptar slug, nombre o UUID
+    let resolvedClientId = clientId;
+    // Si no es UUID, buscar por slug o nombre
+    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    if (!uuidRegex.test(clientId.trim())) {
+      // Buscar usuario por slug o nombre
+      const usersCollection = await getUsersCollection();
+      const user = await usersCollection.findOne({
+        $or: [
+          { slug: clientId.trim() },
+          { organizationName: new RegExp(clientId.trim(), 'i') }
+        ]
+      });
+      if (user) {
+        resolvedClientId = user.id;
+      } else {
+        return res.json({ data: [] });
+      }
+    }
+    // Buscar ligas activas de ese cliente
+    const allLeagues = await getAllLeaguesFromMongo();
+    const leagues = allLeagues.filter(l => l.ownerUserId === resolvedClientId && l.active);
     res.json({ data: leagues });
   } catch (err) {
     res.status(500).json({ message: 'Error al obtener ligas del cliente', error: String(err) });
