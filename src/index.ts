@@ -290,8 +290,70 @@ app.post('/api/admin/leagues/:leagueId/teams', async (req, res) => {
 app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, res) => {
   try {
     const { clientId, leagueId } = req.params;
-    const fixture = await getLeagueFixture(clientId, leagueId);
-    res.json({ data: fixture });
+    const { categoryId } = req.query;
+    if (!categoryId) return res.status(400).json({ message: 'Falta categoryId' });
+
+    // 1. Liga
+    const leagues = await getAllLeaguesFromMongo();
+    const league = leagues.find(l => l.id === leagueId);
+    if (!league) return res.status(404).json({ message: 'Liga no encontrada' });
+
+    // 2. Categoría
+    const category = league.categories.find(c => c.id === categoryId);
+    if (!category) return res.status(404).json({ message: 'Categoría no encontrada' });
+
+    // 3. Equipos
+    const allTeams = await getAllTeamsFromMongo();
+    const teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
+
+    // 4. Fixture (estructura rounds, solo con matchId)
+    const allSchedules = await getAllFixtureSchedulesFromMongo();
+    const schedule = allSchedules.filter(s => s.leagueId === leagueId && s.categoryId === categoryId);
+    type FixtureRound = { round: number, matches: { matchId: string }[] };
+    const fixture: FixtureRound[] = [];
+    for (const s of schedule) {
+      let roundObj = fixture.find(r => r.round === s.round);
+      if (!roundObj) {
+        roundObj = { round: s.round, matches: [] };
+        fixture.push(roundObj);
+      }
+      roundObj.matches.push({ matchId: s.matchId });
+    }
+
+    // 5. Partidos jugados
+    const allPlayed = await getAllPlayedMatchesFromMongo();
+    const playedMatches = allPlayed.filter(m => m.leagueId === leagueId && m.categoryId === categoryId);
+    const playedMatchIds = playedMatches.map(m => m.matchId);
+
+    // 6. Premios de ronda
+    const allAwards = await getAllRoundAwardsFromMongo();
+    const roundAwards = allAwards.filter(a => a.leagueId === leagueId && a.categoryId === categoryId);
+
+    // 7. Respuesta
+    res.json({
+      data: {
+        league: {
+          id: league.id,
+          name: league.name,
+          country: league.country,
+          season: league.season,
+          slogan: league.slogan,
+          themeColor: league.themeColor,
+          backgroundImageUrl: league.backgroundImageUrl,
+          logoUrl: league.logoUrl
+        },
+        category: {
+          id: category.id,
+          name: category.name
+        },
+        teams,
+        fixture,
+        schedule,
+        playedMatchIds,
+        playedMatches,
+        roundAwards
+      }
+    });
   } catch (err) {
     res.status(500).json({ message: 'Error al obtener fixture público', error: String(err) });
   }
