@@ -414,19 +414,25 @@ app.get('/api/public/client/:clientId/engagement', async (req, res) => {
 app.get('/api/public/client/:clientId/leagues', async (req, res) => {
   try {
     const { clientId } = req.params;
-    // Restaurar lógica: aceptar slug, nombre o UUID
     let resolvedClientId = clientId;
-    // Si no es UUID, buscar por slug o nombre
     const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    // Normalizar el parámetro para búsqueda por nombre de empresa (minusculas, sin espacios, sin acentos)
+    function normalize(str: string): string {
+      return (str || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]/g, '');
+    }
     if (!uuidRegex.test(clientId.trim())) {
-      // Buscar usuario por slug o nombre
       const usersCollection = await getUsersCollection();
-      const user = await usersCollection.findOne({
-        $or: [
-          { slug: clientId.trim() },
-          { organizationName: new RegExp(clientId.trim(), 'i') }
-        ]
-      });
+      // Buscar por slug exacto
+      let user = await usersCollection.findOne({ slug: clientId.trim() });
+      if (!user) {
+        // Buscar por organizationName normalizado
+        const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
+        user = allUsers.find(u => normalize(u.organizationName ?? '') === normalize(clientId)) || null;
+      }
       if (user) {
         resolvedClientId = user.id;
       } else {
