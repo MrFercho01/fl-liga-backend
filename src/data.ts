@@ -236,6 +236,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { GridFSBucket, MongoClient, ObjectId, type Collection, type Db } from 'mongodb'
 
+// Inicializa el índice compuesto para la colección de partidos jugados
+export async function ensurePlayedMatchesIndexes() {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  const collection = mongoDb!.collection('played_matches');
+  // Índice para búsquedas rápidas por estado y matchId
+  await collection.createIndex({ status: 1, matchId: 1 });
+}
+
 export interface RuleSet {
   playersOnField: number
   maxRegisteredPlayers?: number
@@ -371,6 +380,7 @@ export interface PlayedMatchPlayerStats {
 }
 
 export interface PlayedMatchRecord {
+  status: 'finished' | 'disabled' | 'cancelled';
   matchId: string
   leagueId: string
   categoryId: string
