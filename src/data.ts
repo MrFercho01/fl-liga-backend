@@ -380,7 +380,7 @@ export interface PlayedMatchPlayerStats {
 }
 
 export interface PlayedMatchRecord {
-  status: 'finished' | 'disabled' | 'cancelled';
+  status: 'finished' | 'disabled' | 'cancelled' | 'live';
   matchId: string
   leagueId: string
   categoryId: string
