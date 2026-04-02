@@ -1,75 +1,3 @@
-// --- ENDPOINTS ADMIN ROUND AWARDS Y PLAYED MATCHES ---
-// Obtener mejores jugadoras por fecha (todas las rondas de una liga/categoría)
-app.get('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
-  const { leagueId } = req.params;
-  const { categoryId } = req.query;
-  try {
-    const all = await getAllRoundAwardsFromMongo();
-    const filtered = all.filter(r => r.leagueId === leagueId && (!categoryId || r.categoryId === categoryId));
-    res.json({ ok: true, data: filtered });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: 'Error cargando mejores jugadoras por fecha' });
-  }
-});
-
-// Guardar mejores jugadoras de la fecha
-app.post('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
-  const { leagueId } = req.params;
-  const payload = req.body;
-  try {
-    const entry = { ...payload, leagueId, updatedAt: new Date().toISOString() };
-    await saveRoundAwardToMongo(entry);
-    res.json({ ok: true, data: entry });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: 'Error guardando mejores jugadoras de la fecha' });
-  }
-});
-
-// Ranking de jugadora de la fecha (acumulado por votos)
-app.get('/api/admin/leagues/:leagueId/round-awards-ranking', async (req, res) => {
-  const { leagueId } = req.params;
-  const { categoryId } = req.query;
-  try {
-    const all = await getAllRoundAwardsFromMongo();
-    const filtered = all.filter(r => r.leagueId === leagueId && (!categoryId || r.categoryId === categoryId));
-    // Agrupar votos por jugadora
-    const rankingMap = new Map();
-    filtered.forEach(entry => {
-      entry.matchBestPlayers.forEach(player => {
-        const key = player.playerId + '|' + player.teamId;
-        if (!rankingMap.has(key)) {
-          rankingMap.set(key, {
-            playerId: player.playerId,
-            playerName: player.playerName,
-            teamId: player.teamId,
-            teamName: player.teamName,
-            votes: 1,
-          });
-        } else {
-          rankingMap.get(key).votes++;
-        }
-      });
-    });
-    const ranking = Array.from(rankingMap.values()).sort((a, b) => b.votes - a.votes);
-    res.json({ ok: true, data: ranking });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: 'Error cargando ranking de jugadora de la fecha' });
-  }
-});
-
-// Partidos jugados por liga/categoría
-app.get('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
-  const { leagueId } = req.params;
-  const { categoryId } = req.query;
-  try {
-    const all = await getAllPlayedMatchesFromMongo();
-    const filtered = all.filter(m => m.leagueId === leagueId && (!categoryId || m.categoryId === categoryId));
-    res.json({ ok: true, data: filtered });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: 'Error cargando partidos jugados' });
-  }
-});
-
 import { app } from './server-stub';
 
 import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
@@ -156,6 +84,79 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
+// --- ENDPOINTS ADMIN ROUND AWARDS Y PLAYED MATCHES ---
+// Obtener mejores jugadoras por fecha (todas las rondas de una liga/categoría)
+app.get('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
+  const { leagueId } = req.params;
+  const { categoryId } = req.query;
+  try {
+    const all = await getAllRoundAwardsFromMongo();
+    const filtered = all.filter(r => r.leagueId === leagueId && (!categoryId || r.categoryId === categoryId));
+    res.json({ ok: true, data: filtered });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: 'Error cargando mejores jugadoras por fecha' });
+  }
+});
+
+// Guardar mejores jugadoras de la fecha
+app.post('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
+  const { leagueId } = req.params;
+  const payload = req.body;
+  try {
+    const entry = { ...payload, leagueId, updatedAt: new Date().toISOString() };
+    await saveRoundAwardToMongo(entry);
+    res.json({ ok: true, data: entry });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: 'Error guardando mejores jugadoras de la fecha' });
+  }
+});
+
+// Ranking de jugadora de la fecha (acumulado por votos)
+app.get('/api/admin/leagues/:leagueId/round-awards-ranking', async (req, res) => {
+  const { leagueId } = req.params;
+  const { categoryId } = req.query;
+  try {
+    const all = await getAllRoundAwardsFromMongo();
+    const filtered = all.filter(r => r.leagueId === leagueId && (!categoryId || r.categoryId === categoryId));
+    // Agrupar votos por jugadora
+    const rankingMap = new Map();
+    filtered.forEach(entry => {
+      entry.matchBestPlayers.forEach(player => {
+        const key = player.playerId + '|' + player.teamId;
+        if (!rankingMap.has(key)) {
+          rankingMap.set(key, {
+            playerId: player.playerId,
+            playerName: player.playerName,
+            teamId: player.teamId,
+            teamName: player.teamName,
+            votes: 1,
+          });
+        } else {
+          rankingMap.get(key).votes++;
+        }
+      });
+    });
+    const ranking = Array.from(rankingMap.values()).sort((a, b) => b.votes - a.votes);
+    res.json({ ok: true, data: ranking });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: 'Error cargando ranking de jugadora de la fecha' });
+  }
+});
+
+// Partidos jugados por liga/categoría
+app.get('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
+  const { leagueId } = req.params;
+  const { categoryId } = req.query;
+  try {
+    const all = await getAllPlayedMatchesFromMongo();
+    const filtered = all.filter(m => m.leagueId === leagueId && (!categoryId || m.categoryId === categoryId));
+    res.json({ ok: true, data: filtered });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: 'Error cargando partidos jugados' });
+  }
+});
+
 
 // Endpoint de logs de auditoría solo para super_admin
 app.get('/api/admin/audit-logs', requireSuperAdmin, async (req, res) => {
