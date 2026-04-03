@@ -331,6 +331,10 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
     const allAwards = await getAllRoundAwardsFromMongo();
     const roundAwards = allAwards.filter(a => a.leagueId === leagueId && a.categoryId === categoryId);
 
+    // Obtener equipos de la liga/categoría
+    const allTeams = await getAllTeamsFromMongo();
+    const teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
+
     res.json({
       data: {
         league: {
@@ -351,7 +355,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
         schedule,
         playedMatchIds,
         playedMatches,
-        roundAwards
+        roundAwards,
+        teams // <-- ahora incluido en la respuesta
       }
     });
   } catch (err) {
@@ -1275,8 +1280,10 @@ app.post('/api/auth/client/register', async (req, res) => {
     };
     // Guardar usuario en MongoDB
     await saveUserToMongo(newUser);
-    // Devolver token y datos del usuario
-    res.json({ data: { token: newUser.id, user: newUser } });
+    // Recargar usuario para obtener publicPortalPath
+    const usersReloaded = await getAllUsersFromMongo();
+    const userWithPath = usersReloaded.find(u => u.id === newUser.id);
+    res.json({ data: { token: newUser.id, user: userWithPath } });
   } catch (err) {
     res.status(500).json({ message: 'Error al registrar cliente', error: String(err) });
   }

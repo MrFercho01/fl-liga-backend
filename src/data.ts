@@ -305,6 +305,7 @@ export interface AppUser {
   mustChangePassword?: boolean
   role: 'super_admin' | 'client_admin'
   active: boolean
+  publicPortalPath?: string // Nuevo campo para link público del cliente
 }
 
 export interface RegisteredPlayer {
