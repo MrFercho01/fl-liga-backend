@@ -167,9 +167,9 @@ app.get('/api/admin/audit-logs', requireSuperAdmin, async (req, res) => {
     const db = client.db('fl_liga');
     const logs = await db.collection('audit_logs').find({}).sort({ timestamp: -1 }).limit(100).toArray();
     await client.close();
-    res.json({ data: logs });
+    res.json({ ok: true, data: logs });
   } catch (err) {
-    res.status(500).json({ message: 'Error al obtener logs', error: String(err) });
+    res.status(500).json({ ok: false, message: 'Error al obtener logs', error: String(err) });
   }
 });
 // ...otras importaciones...
