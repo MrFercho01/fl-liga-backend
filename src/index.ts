@@ -1548,7 +1548,31 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
+    if (user.mustChangePassword) {
+      return res.status(403).json({ code: 'MUST_CHANGE_PASSWORD', message: 'Debes cambiar tu contraseña antes de continuar.' });
+    }
     res.json({ data: { token: user.id, user } });
+  // Endpoint para obtener solo las ligas del usuario autenticado (client_admin)
+  app.get('/api/admin/leagues', async (req, res) => {
+    try {
+      const auth = req.headers.authorization;
+      if (!auth) return res.status(401).json({ message: 'No autenticado' });
+      const userId = auth.replace('Bearer ', '');
+      const users = await getAllUsersFromMongo();
+      const user = users.find((u) => u.id === userId && u.active);
+      if (!user) return res.status(401).json({ message: 'Usuario no encontrado' });
+      // Si es client_admin, filtrar ligas por ownerUserId
+      if (user.role === 'client_admin') {
+        const leagues = await getLeaguesByClientId(user.id);
+        return res.json({ data: leagues });
+      }
+      // Si es super_admin, devolver todas
+      const leagues = await getAllLeaguesFromMongo();
+      res.json({ data: leagues });
+    } catch (err) {
+      res.status(500).json({ message: 'Error al obtener ligas', error: String(err) });
+    }
+  });
   } catch (err) {
     res.status(500).json({ message: 'Error en login', error: String(err) });
   }
