@@ -1175,27 +1175,31 @@ app.patch('/api/admin/client-users/:userId', async (req, res) => {
 // Crear usuario client_admin
 app.post('/api/admin/client-users', async (req, res) => {
   try {
-    const { name, organizationName, email, password } = req.body;
+    // Validar que req.body exista y sea objeto
+    let body = req.body;
+    if (!body || (typeof body !== 'object' && typeof body !== 'string')) {
+      return res.status(400).json({
+        message: 'No se recibió información del formulario. Verifica que el frontend envíe los datos como JSON.',
+        code: 'NO_BODY',
+      });
+    }
+    // Si el body viene como string (caso edge), intentar parsear
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        return res.status(400).json({
+          message: 'El formato de datos enviados no es válido (no es JSON).',
+          code: 'INVALID_BODY',
+        });
+      }
+    }
+    const { name, organizationName, email, password } = body;
     // Validación básica
     if (!name || !organizationName || !email) {
       return res.status(400).json({
         message: 'Por favor completa todos los campos requeridos: nombre, empresa/liga y correo.',
         code: 'MISSING_FIELDS',
-      });
-    }
-    // Validación de email
-    const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        message: 'El correo ingresado no es válido.',
-        code: 'INVALID_EMAIL',
-      });
-    }
-    // Validación de nombre de organización
-    if (organizationName.length < 3) {
-      return res.status(400).json({
-        message: 'El nombre de la empresa/liga debe tener al menos 3 caracteres.',
-        code: 'ORG_NAME_TOO_SHORT',
       });
     }
     const users = await getAllUsersFromMongo();
@@ -1216,7 +1220,7 @@ app.post('/api/admin/client-users', async (req, res) => {
       role: 'client_admin',
       active: true,
       publicPortalPath: `/cliente/${slug}`,
-      mustChangePassword: false,
+      mustChangePassword: true,
     };
     try {
       await saveUserToMongo(newUser);
