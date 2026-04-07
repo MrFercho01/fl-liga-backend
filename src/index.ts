@@ -75,7 +75,7 @@ import { ensurePlayedMatchesIndexes } from './data'
 import { Request, Response, NextFunction } from 'express'
 
 // Configuración CORS robusta: permitir FE producción y local
-app.use(cors({
+/*app.use(cors({
   origin: [
     'https://fl-liga-frontend.vercel.app',
     'http://localhost:5173'
@@ -83,7 +83,23 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+}));*/
+
+// Middleware CORS robusto para Render y desarrollo local
+
+app.use(cors({
+  origin: [
+    'http://localhost:5173', // FE local
+    'https://fl-liga-frontend.vercel.app', // FE producción (ajusta si tu dominio es otro)
+    'https://fl-liga-frontend.onrender.com', // FE en Render (si aplica)
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
+// Middleware para parsear JSON
+app.use(express.json());
 
 // --- ENDPOINTS ADMIN ROUND AWARDS Y PLAYED MATCHES ---
 // Obtener mejores jugadoras por fecha (todas las rondas de una liga/categoría)
@@ -1419,22 +1435,6 @@ function normalizeTechnicalStaff(rawStaff: any) {
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
-
-// Middleware CORS robusto para Render y desarrollo local
-
-app.use(cors({
-  origin: [
-    'http://localhost:5173', // FE local
-    'https://fl-liga-frontend.vercel.app', // FE producción (ajusta si tu dominio es otro)
-    'https://fl-liga-frontend.onrender.com', // FE en Render (si aplica)
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
-
-// Middleware para parsear JSON
-app.use(express.json());
 
 // Helper para asegurar engagement público
 
