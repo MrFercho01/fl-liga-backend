@@ -98,8 +98,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-// Middleware para parsear JSON
-app.use(express.json());
+// Middleware para parsear JSON y formularios con límite aumentado
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // --- ENDPOINTS ADMIN ROUND AWARDS Y PLAYED MATCHES ---
 // Obtener mejores jugadoras por fecha (todas las rondas de una liga/categoría)
@@ -1315,8 +1316,9 @@ app.post('/api/auth/client/reset-password', async (req, res) => {
     if (currentPassword && user.password !== currentPassword) {
       return res.status(401).json({ message: 'Contraseña actual incorrecta' });
     }
-    // Actualizar password
+    // Actualizar password y quitar flag de cambio obligatorio
     user.password = password;
+    user.mustChangePassword = false;
     await saveUserToMongo(user);
     res.json({ data: { ok: true } });
   } catch (err) {
