@@ -1176,13 +1176,37 @@ app.patch('/api/admin/client-users/:userId', async (req, res) => {
 app.post('/api/admin/client-users', async (req, res) => {
   try {
     const { name, organizationName, email, password } = req.body;
+    // Validación básica
     if (!name || !organizationName || !email) {
-      return res.status(400).json({ message: 'Faltan campos requeridos' });
+      return res.status(400).json({
+        message: 'Por favor completa todos los campos requeridos: nombre, empresa/liga y correo.',
+        code: 'MISSING_FIELDS',
+      });
+    }
+    // Validación de email
+    const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        message: 'El correo ingresado no es válido.',
+        code: 'INVALID_EMAIL',
+      });
+    }
+    // Validación de nombre de organización
+    if (organizationName.length < 3) {
+      return res.status(400).json({
+        message: 'El nombre de la empresa/liga debe tener al menos 3 caracteres.',
+        code: 'ORG_NAME_TOO_SHORT',
+      });
     }
     const users = await getAllUsersFromMongo();
     if (users.some((u) => u.email === email)) {
-      return res.status(409).json({ message: 'El email ya está registrado' });
+      return res.status(409).json({
+        message: 'Ya existe un usuario registrado con ese correo.',
+        code: 'EMAIL_EXISTS',
+      });
     }
+    // Generar slug seguro para publicPortalPath
+    const slug = organizationName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const newUser: AppUser = {
       id: (Math.random().toString(36).slice(2) + Date.now()),
       name,
@@ -1191,11 +1215,43 @@ app.post('/api/admin/client-users', async (req, res) => {
       password: password || '',
       role: 'client_admin',
       active: true,
+      publicPortalPath: `/cliente/${slug}`,
+      mustChangePassword: false,
     };
-    await saveUserToMongo(newUser);
+    try {
+      await saveUserToMongo(newUser);
+    } catch (mongoErr) {
+      // Error técnico de base de datos
+      const isSuperAdmin = req.headers['authorization'] && String(req.headers['authorization']).includes('super-admin');
+      if (isSuperAdmin) {
+        return res.status(500).json({
+          message: 'Error técnico al guardar en base de datos',
+          error: String(mongoErr),
+          code: 'MONGO_ERROR',
+        });
+      } else {
+        return res.status(500).json({
+          message: 'No se pudo crear el cliente admin por un error interno. Por favor intenta más tarde o contacta soporte.',
+          code: 'INTERNAL_ERROR',
+        });
+      }
+    }
     res.json({ data: newUser });
   } catch (err) {
-    res.status(500).json({ message: 'Error al crear cliente admin', error: String(err) });
+    // Error inesperado
+    const isSuperAdmin = req.headers['authorization'] && String(req.headers['authorization']).includes('super-admin');
+    if (isSuperAdmin) {
+      res.status(500).json({
+        message: 'Error técnico inesperado',
+        error: String(err),
+        code: 'UNEXPECTED_ERROR',
+      });
+    } else {
+      res.status(500).json({
+        message: 'No se pudo crear el cliente admin por un error inesperado. Intenta más tarde.',
+        code: 'INTERNAL_ERROR',
+      });
+    }
   }
 });
 // Obtener todos los usuarios admin (super_admin y client_admin)
