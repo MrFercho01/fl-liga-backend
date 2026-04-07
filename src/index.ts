@@ -1,3 +1,30 @@
+// Actualizar categorías de una liga
+app.put('/api/admin/leagues/:leagueId/categories', requireAuth, async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const { categories } = req.body;
+    if (!Array.isArray(categories)) {
+      return res.status(400).json({ ok: false, message: 'Falta arreglo de categorías' });
+    }
+    // Validación mínima de categorías
+    for (const cat of categories) {
+      if (!cat.id || !cat.name || typeof cat.minAge !== 'number' || typeof cat.maxAge === 'undefined') {
+        return res.status(400).json({ ok: false, message: 'Datos de categoría inválidos' });
+      }
+    }
+    const collection = await getLeaguesCollection();
+    const result = await collection.updateOne(
+      { id: leagueId },
+      { $set: { categories } }
+    );
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ ok: false, message: 'Liga no encontrada' });
+    }
+    res.json({ ok: true, message: 'Categorías actualizadas', data: categories });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: 'Error al actualizar categorías', error: String(err) });
+  }
+});
 import { app } from './server-stub';
 
 import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
