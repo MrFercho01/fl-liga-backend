@@ -1587,7 +1587,13 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(403).json({ code: 'MUST_CHANGE_PASSWORD', message: 'Debes cambiar tu contraseña antes de continuar.' });
     }
     res.json({ data: { token: user.id, user } });
-  // Endpoint para obtener solo las ligas del usuario autenticado (client_admin)
+  
+  } catch (err) {
+    res.status(500).json({ message: 'Error en login', error: String(err) });
+  }
+});
+
+// Endpoint para obtener solo las ligas del usuario autenticado (client_admin)
   app.get('/api/admin/leagues', async (req, res) => {
     try {
       const auth = req.headers.authorization;
@@ -1608,10 +1614,6 @@ app.post('/api/auth/login', async (req, res) => {
       res.status(500).json({ message: 'Error al obtener ligas', error: String(err) });
     }
   });
-  } catch (err) {
-    res.status(500).json({ message: 'Error en login', error: String(err) });
-  }
-});
 
 // Validar accessToken de cliente
 app.post('/api/auth/client-token/validate', async (req, res) => {
