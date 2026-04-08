@@ -1611,13 +1611,19 @@ app.post('/api/auth/login', async (req, res) => {
       const user = users.find((u) => u.id === userId && u.active);
       if (!user) return res.status(401).json({ message: 'Usuario no encontrado' });
       // Si es client_admin, filtrar ligas por ownerUserId
+      let leagues = [];
       if (user.role === 'client_admin') {
-        const leagues = await getLeaguesByClientId(user.id);
-        return res.json({ data: leagues });
+        leagues = await getLeaguesByClientId(user.id);
+      } else {
+        leagues = await getAllLeaguesFromMongo();
       }
-      // Si es super_admin, devolver todas
-      const leagues = await getAllLeaguesFromMongo();
-      res.json({ data: leagues });
+      // Mapear ownerUserId a organizationName
+      const userMap = new Map(users.map(u => [u.id, u.organizationName || u.name || '']));
+      const leaguesWithOwner = leagues.map(l => ({
+        ...l,
+        ownerOrganizationName: userMap.get(l.ownerUserId) || l.ownerUserId
+      }));
+      res.json({ data: leaguesWithOwner });
     } catch (err) {
       res.status(500).json({ message: 'Error al obtener ligas', error: String(err) });
     }
