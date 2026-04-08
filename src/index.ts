@@ -109,28 +109,36 @@ app.put('/api/admin/leagues/:leagueId/categories', requireAuth, async (req, res)
     let { leagueId } = req.params;
     const leagueIdStr = Array.isArray(leagueId) ? leagueId[0] : leagueId;
     if (!leagueIdStr) {
+      console.log('[categorias] ID de liga inválido:', leagueId);
       return res.status(400).json({ ok: false, message: 'ID de liga inválido' });
     }
     const { categories } = req.body;
     if (!Array.isArray(categories)) {
+      console.log('[categorias] Falta arreglo de categorías en body:', req.body);
       return res.status(400).json({ ok: false, message: 'Falta arreglo de categorías' });
     }
     // Validación mínima de categorías
     for (const cat of categories) {
       if (!cat.id || !cat.name || typeof cat.minAge !== 'number' || typeof cat.maxAge === 'undefined') {
+        console.log('[categorias] Datos de categoría inválidos:', cat);
         return res.status(400).json({ ok: false, message: 'Datos de categoría inválidos' });
       }
     }
+    console.log('[categorias] Actualizando categorías para liga:', leagueIdStr, 'Payload:', categories);
     const collection = await getLeaguesCollection();
     const result = await collection.updateOne(
       { id: leagueIdStr },
       { $set: { categories } }
     );
+    console.log('[categorias] Resultado updateOne:', JSON.stringify(result));
     if (result.matchedCount === 0) {
+      console.log('[categorias] Liga no encontrada para id:', leagueIdStr);
       return res.status(404).json({ ok: false, message: 'Liga no encontrada' });
     }
+    console.log('[categorias] Categorías actualizadas correctamente para liga:', leagueIdStr);
     res.json({ ok: true, message: 'Categorías actualizadas', data: categories });
   } catch (err) {
+    console.error('[categorias] Error al actualizar categorías:', err);
     res.status(500).json({ ok: false, message: 'Error al actualizar categorías', error: String(err) });
   }
 });
