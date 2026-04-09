@@ -514,6 +514,14 @@ export interface ClientAccessTokenEntry {
 
 export const SUPER_ADMIN_USER_ID = 'super-admin'
 
+// LOG de depuración para monitorear variables de entorno
+console.log('---[DEBUG]---')
+console.log('MONGODB_URI:', process.env.MONGODB_URI)
+console.log('MONGODB_DB_NAME:', process.env.MONGODB_DB_NAME)
+console.log('MONGODB_COLLECTION_NAME:', process.env.MONGODB_COLLECTION_NAME)
+console.log('MONGODB_STATE_DOCUMENT_ID:', process.env.MONGODB_STATE_DOCUMENT_ID)
+console.log('---[END DEBUG]---')
+
 const mongoUri = process.env.MONGODB_URI?.trim() || ''
 const mongoDbName = process.env.MONGODB_DB_NAME?.trim() || 'fl_liga'
 let mongoClient: MongoClient | null = null
