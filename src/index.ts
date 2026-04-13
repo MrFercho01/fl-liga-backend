@@ -902,10 +902,44 @@ app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (req, res) => {
 app.get('/api/admin/leagues/:leagueId/fixture', async (req, res) => {
   try {
     const { leagueId } = req.params;
-    const fixture = await getLeagueFixture('', leagueId);
-    res.json({ data: fixture });
+    const { categoryId } = req.query;
+    // Obtener schedules y equipos desde MongoDB
+    const schedules = await getAllFixtureSchedulesFromMongo();
+    const teams = await getAllTeamsFromMongo();
+    const filteredSchedules = schedules.filter(s => s.leagueId === leagueId && (!categoryId || s.categoryId === categoryId));
+    const filteredTeams = teams.filter(t => t.leagueId === leagueId && (!categoryId || t.categoryId === categoryId));
+
+    // Construir rounds agrupando por round
+    const roundsMap = new Map();
+    for (const s of filteredSchedules) {
+      // Extraer homeTeamId y awayTeamId del matchId si es posible
+      let homeTeamId = null;
+      let awayTeamId = null;
+      if (typeof s.matchId === 'string' && s.matchId.includes('_')) {
+        // Ejemplo: manual_1__<homeTeamId>_<awayTeamId>
+        const parts = s.matchId.split('_');
+        if (parts.length >= 4) {
+          homeTeamId = parts[2] || null;
+          awayTeamId = parts[3] || null;
+        }
+      }
+      if (!roundsMap.has(s.round)) {
+        roundsMap.set(s.round, []);
+      }
+      roundsMap.get(s.round).push({
+        homeTeamId,
+        awayTeamId,
+        hasBye: false // No hay campo hasBye, se asume false
+      });
+    }
+    const rounds = Array.from(roundsMap.entries()).map(([round, matches]) => ({ round, matches }));
+    const teamsCount = filteredTeams.length;
+    const hasBye = false; // No hay campo hasBye, se asume false
+    res.json({ data: { teamsCount, hasBye, rounds } });
   } catch (err) {
-    res.status(500).json({ message: 'Error al obtener fixture admin', error: String(err) });
+    if (!res.headersSent) {
+      res.json({ data: { teamsCount: 0, hasBye: false, rounds: [] } });
+    }
   }
 });
 // Eliminar jugador de un equipo
