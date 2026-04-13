@@ -132,11 +132,15 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
     }
     // Traer todos los equipos y filtrar por liga y categoría
     const allTeams = await getAllTeamsFromMongo();
-    const teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
+    let teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
+    if (!Array.isArray(teams)) teams = [];
     res.json({ data: teams });
   } catch (err) {
     console.error('[API] Error en /api/admin/leagues/:leagueId/teams:', err);
-    res.status(500).json({ message: 'Error al obtener equipos', error: String(err) });
+    // Siempre responde con data vacía si hay error de datos, para que el FE no se rompa
+    if (!res.headersSent) {
+      res.json({ data: [] });
+    }
   }
 });
 
@@ -744,9 +748,43 @@ app.get('/api/live/match', async (req, res) => {
         homeTeam: { name: m.homeTeamName },
         awayTeam: { name: m.awayTeamName }
       }));
-    res.json({ data: liveMatches });
+    if (liveMatches.length === 0) {
+      // Devuelve un objeto LiveMatch vacío compatible
+      res.json({ data: {
+        id: '',
+        leagueName: '',
+        categoryName: '',
+        status: 'scheduled',
+        homeTeam: {
+          id: '', name: '', players: [], starters: [], substitutes: [], redCarded: [], staffDiscipline: { director: { yellows: 0, reds: 0, sentOff: false }, assistant: { yellows: 0, reds: 0, sentOff: false } }, stats: { shots: 0, goals: 0, yellows: 0, reds: 0, assists: 0 }, playerStats: {} },
+        awayTeam: {
+          id: '', name: '', players: [], starters: [], substitutes: [], redCarded: [], staffDiscipline: { director: { yellows: 0, reds: 0, sentOff: false }, assistant: { yellows: 0, reds: 0, sentOff: false } }, stats: { shots: 0, goals: 0, yellows: 0, reds: 0, assists: 0 }, playerStats: {} },
+        settings: { playersOnField: 0, matchMinutes: 0, breakMinutes: 0, homeHasBye: false, awayHasBye: false },
+        timer: { running: false, startedAt: null, elapsedSeconds: 0 },
+        currentMinute: 0,
+        events: []
+      }});
+    } else {
+      res.json({ data: liveMatches[0] });
+    }
   } catch (err) {
-    res.status(500).json({ message: 'Error al obtener partidos en vivo', error: String(err) });
+    // Si hay error, responde con objeto vacío compatible
+    if (!res.headersSent) {
+      res.json({ data: {
+        id: '',
+        leagueName: '',
+        categoryName: '',
+        status: 'scheduled',
+        homeTeam: {
+          id: '', name: '', players: [], starters: [], substitutes: [], redCarded: [], staffDiscipline: { director: { yellows: 0, reds: 0, sentOff: false }, assistant: { yellows: 0, reds: 0, sentOff: false } }, stats: { shots: 0, goals: 0, yellows: 0, reds: 0, assists: 0 }, playerStats: {} },
+        awayTeam: {
+          id: '', name: '', players: [], starters: [], substitutes: [], redCarded: [], staffDiscipline: { director: { yellows: 0, reds: 0, sentOff: false }, assistant: { yellows: 0, reds: 0, sentOff: false } }, stats: { shots: 0, goals: 0, yellows: 0, reds: 0, assists: 0 }, playerStats: {} },
+        settings: { playersOnField: 0, matchMinutes: 0, breakMinutes: 0, homeHasBye: false, awayHasBye: false },
+        timer: { running: false, startedAt: null, elapsedSeconds: 0 },
+        currentMinute: 0,
+        events: []
+      }});
+    }
   }
 });
 
