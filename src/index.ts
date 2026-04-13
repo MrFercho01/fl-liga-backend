@@ -1,4 +1,3 @@
-
 import { app } from './server-stub';
 
 import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
@@ -102,6 +101,24 @@ app.use(cors({
 // Middleware para parsear JSON y formularios con límite aumentado
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+// Endpoint: obtener equipos registrados de una liga y categoría (compatibilidad FE)
+app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const { categoryId } = req.query;
+    if (!categoryId || typeof categoryId !== 'string') {
+      return res.status(400).json({ message: 'Falta categoryId' });
+    }
+    // Traer todos los equipos y filtrar por liga y categoría
+    const allTeams = await getAllTeamsFromMongo();
+    const teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
+    res.json({ data: teams });
+  } catch (err) {
+    console.error('[API] Error en /api/admin/leagues/:leagueId/teams:', err);
+    res.status(500).json({ message: 'Error al obtener equipos', error: String(err) });
+  }
+});
 
 // Actualizar categorías de una liga
 app.put('/api/admin/leagues/:leagueId/categories', requireAuth, async (req, res) => {
