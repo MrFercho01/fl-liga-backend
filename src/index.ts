@@ -102,6 +102,45 @@ app.use(cors({
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
+// Actualizar reglas de una categoría específica de una liga
+app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth, async (req, res) => {
+  try {
+    let { leagueId, categoryId } = req.params;
+    const { rules } = req.body;
+    // Normaliza leagueId y categoryId a string
+    if (Array.isArray(leagueId)) leagueId = leagueId[0];
+    if (Array.isArray(categoryId)) categoryId = categoryId[0];
+    if (!leagueId || !categoryId) {
+      return res.status(400).json({ message: 'Faltan parámetros de liga o categoría' });
+    }
+    if (!rules || typeof rules !== 'object') {
+      return res.status(400).json({ message: 'Faltan reglas a actualizar' });
+    }
+    const leaguesCollection = await getLeaguesCollection();
+    // Buscar la liga
+    const league = await leaguesCollection.findOne({ id: leagueId });
+    if (!league) {
+      return res.status(404).json({ message: 'Liga no encontrada' });
+    }
+    // Buscar la categoría
+    const categories = Array.isArray(league.categories) ? league.categories : [];
+    const catIdx = categories.findIndex((c: any) => c.id === categoryId);
+    if (catIdx === -1 || !categories[catIdx]) {
+      return res.status(404).json({ message: 'Categoría no encontrada en la liga' });
+    }
+    // Actualizar reglas
+    categories[catIdx].rules = { ...categories[catIdx].rules, ...rules };
+    // Guardar cambios
+    await leaguesCollection.updateOne(
+      { id: leagueId },
+      { $set: { categories } }
+    );
+    res.json({ ok: true, message: 'Reglas actualizadas', data: categories[catIdx] });
+  } catch (err) {
+    res.status(500).json({ message: 'Error al actualizar reglas', error: String(err) });
+  }
+});
+
 // Endpoint: obtener ligas según usuario autenticado (cliente: solo sus ligas, superadmin: todas)
 app.get('/api/leagues', async (req, res) => {
   try {
