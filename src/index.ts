@@ -102,6 +102,26 @@ app.use(cors({
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
+// Endpoint: obtener ligas según usuario autenticado (cliente: solo sus ligas, superadmin: todas)
+app.get('/api/leagues', async (req, res) => {
+  try {
+    // Autenticación y obtención de usuario
+    const user = await requireAuth(req, res);
+    let leagues;
+    if (user.role === 'super_admin' || user.id === SUPER_ADMIN_USER_ID) {
+      leagues = await getAllLeaguesFromMongo();
+    } else {
+      leagues = (await getAllLeaguesFromMongo()).filter(l => l.ownerUserId === user.id);
+    }
+    res.json({ data: leagues });
+  } catch (err) {
+    console.error('[API] Error en /api/leagues:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Error al obtener ligas', error: String(err) });
+    }
+  }
+});
+
 // Endpoint: obtener equipos registrados de una liga y categoría (compatibilidad FE)
 app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
   try {
