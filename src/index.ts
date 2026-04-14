@@ -220,22 +220,32 @@ app.get('/api/leagues', async (req, res) => {
 // Endpoint: obtener equipos registrados de una liga y categoría (compatibilidad FE)
 app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
   try {
-    const { leagueId } = req.params;
-    const { categoryId } = req.query;
-    if (!categoryId || typeof categoryId !== 'string') {
-      return res.status(400).json({ message: 'Falta categoryId' });
+    let { leagueId } = req.params;
+    let { categoryId } = req.query;
+    // Normalizar leagueId y categoryId a string
+    if (Array.isArray(leagueId)) leagueId = leagueId[0];
+    if (Array.isArray(categoryId)) categoryId = categoryId[0];
+    if (!leagueId || !categoryId || typeof categoryId !== 'string') {
+      return res.status(400).json({ message: 'Falta categoryId o leagueId' });
     }
-    // Traer todos los equipos y filtrar por liga y categoría
-    const allTeams = await getAllTeamsFromMongo();
-    let teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
-    if (!Array.isArray(teams)) teams = [];
+    // Filtrar directamente en MongoDB para máxima eficiencia
+    const teamsCollection = await getTeamsCollection();
+    const teams = await teamsCollection.find({ leagueId: leagueId, categoryId: categoryId }).toArray();
     res.json({ data: teams });
   } catch (err) {
     console.error('[API] Error en /api/admin/leagues/:leagueId/teams:', err);
-    // Siempre responde con data vacía si hay error de datos, para que el FE no se rompa
     if (!res.headersSent) {
       res.json({ data: [] });
     }
+  }
+});
+// Asegurar índice para máxima eficiencia en PATCH de reglas
+getLeaguesCollection().then(async (collection) => {
+  try {
+    await collection.createIndex({ id: 1, "categories.id": 1 });
+    console.log('[INIT] Índice { id: 1, "categories.id": 1 } asegurado en leagues');
+  } catch (e) {
+    console.error('[INIT] Error al crear índice en leagues:', e);
   }
 });
 
