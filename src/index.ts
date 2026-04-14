@@ -288,67 +288,7 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
   }
 });
 
-// Crear equipo en una liga (admin, autenticado)
-app.post('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
-  let timeoutHandle = null;
-  let responded = false;
-  try {
-    let user;
-    try {
-      user = await requireAuth(req, res);
-    } catch (authErr) {
-      if (!responded && !res.headersSent) {
-        res.status(401).json({ ok: false, message: 'No autenticado' });
-        responded = true;
-      }
-      return;
-    }
-    let { leagueId } = req.params;
-    const { categoryId, name, logoUrl, primaryColor, secondaryColor, technicalStaff } = req.body;
-    if (Array.isArray(leagueId)) leagueId = leagueId[0];
-    if (!leagueId || !categoryId || !name) {
-      res.status(400).json({ ok: false, message: 'Faltan datos obligatorios' });
-      return;
-    }
-    timeoutHandle = setTimeout(() => {
-      if (!responded) {
-        responded = true;
-        res.status(504).json({ ok: false, message: 'La transacción demoró demasiado y no se pudo completar. Intenta de nuevo.' });
-      }
-    }, 5000);
-    const teamsCollection = await getTeamsCollection();
-    // Validar unicidad de nombre de equipo en la misma liga y categoría
-    const existing = await teamsCollection.findOne({ leagueId, categoryId, name });
-    if (existing) {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      responded = true;
-      res.status(409).json({ ok: false, message: 'Ya existe un equipo con ese nombre en la categoría' });
-      return;
-    }
-    const newTeam = {
-      id: uuidv4(),
-      leagueId,
-      categoryId,
-      name,
-      logoUrl: logoUrl || '',
-      primaryColor: primaryColor || '',
-      secondaryColor: secondaryColor || '',
-      technicalStaff: technicalStaff || {},
-      players: [],
-      active: true,
-    };
-    await teamsCollection.insertOne(newTeam);
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-    responded = true;
-    res.json({ ok: true, data: newTeam });
-  } catch (err) {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-    if (!responded) {
-      responded = true;
-      res.status(500).json({ ok: false, message: 'Error al crear equipo', error: String(err) });
-    }
-  }
-});
+// ...el endpoint robusto y validado permanece como la única versión activa más adelante en el archivo...
 
 // Modificar equipo (admin, autenticado)
 app.patch('/api/admin/teams/:teamId', requireAuth, async (req, res) => {
