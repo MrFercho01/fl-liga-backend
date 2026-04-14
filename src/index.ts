@@ -142,19 +142,33 @@ app.get('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth
 });
 
 // Actualizar reglas de una categoría específica de una liga
-app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth, async (req, res) => {
-  let timeoutHandle: NodeJS.Timeout | null = null;
+app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', async (req, res) => {
+  let timeoutHandle = null;
   let responded = false;
   try {
+    // --- AUTENTICACIÓN ROBUSTA ---
+    let user;
+    try {
+      user = await requireAuth(req, res);
+    } catch (authErr) {
+      // Si requireAuth lanza, responde y termina
+      if (!responded && !res.headersSent) {
+        res.status(401).json({ ok: false, message: 'No autenticado' });
+        responded = true;
+      }
+      return;
+    }
     let { leagueId, categoryId } = req.params;
     const { rules } = req.body;
     if (Array.isArray(leagueId)) leagueId = leagueId[0];
     if (Array.isArray(categoryId)) categoryId = categoryId[0];
     if (!leagueId || !categoryId) {
-      return res.status(400).json({ message: 'Faltan parámetros de liga o categoría' });
+      res.status(400).json({ ok: false, message: 'Faltan parámetros de liga o categoría' });
+      return;
     }
     if (!rules || typeof rules !== 'object') {
-      return res.status(400).json({ message: 'Faltan reglas a actualizar' });
+      res.status(400).json({ ok: false, message: 'Faltan reglas a actualizar' });
+      return;
     }
     // Timeout de 5 segundos para evitar espera infinita
     timeoutHandle = setTimeout(() => {
@@ -173,17 +187,19 @@ app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAu
     if (updateResult.matchedCount === 0) {
       if (timeoutHandle) clearTimeout(timeoutHandle);
       responded = true;
-      return res.status(404).json({ ok: false, message: 'Liga o categoría no encontrada' });
+      res.status(404).json({ ok: false, message: 'Liga o categoría no encontrada' });
+      return;
     }
     // Devuelve la categoría actualizada
     const league = await leaguesCollection.findOne({ id: leagueId });
     if (!league) {
       if (timeoutHandle) clearTimeout(timeoutHandle);
       responded = true;
-      return res.status(404).json({ ok: false, message: 'Liga no encontrada tras actualizar' });
+      res.status(404).json({ ok: false, message: 'Liga no encontrada tras actualizar' });
+      return;
     }
     const category = Array.isArray(league.categories)
-      ? league.categories.find((c: any) => c.id === categoryId)
+      ? league.categories.find((c) => c.id === categoryId)
       : undefined;
     if (timeoutHandle) clearTimeout(timeoutHandle);
     responded = true;
