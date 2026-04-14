@@ -2152,6 +2152,7 @@ app.post('/api/admin/leagues/:leagueId/teams', async (request, response) => {
     ...(parsed.data.secondaryColor ? { secondaryColor: parsed.data.secondaryColor } : {}),
     ...(normalizedStaff ? { technicalStaff: normalizedStaff } : {}),
     players: [],
+    active: true,
   }
 
   try {
