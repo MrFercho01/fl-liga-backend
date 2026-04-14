@@ -260,83 +260,138 @@ getLeaguesCollection().then(async (collection) => {
   try {
     await collection.createIndex({ id: 1, "categories.id": 1 });
     console.log('[INIT] Índice { id: 1, "categories.id": 1 } asegurado en leagues');
-  } catch (e) {
-    console.error('[INIT] Error al crear índice en leagues:', e);
+  } catch (err) {
+    console.error('[INIT] Error al crear índice en leagues:', err);
   }
 });
 
-// Actualizar categorías de una liga
-app.put('/api/admin/leagues/:leagueId/categories', requireAuth, async (req, res) => {
+// --- ENDPOINTS TEAMS ADMIN ---
+
+// Obtener equipos de una liga y categoría (admin, autenticado)
+app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
   try {
     let { leagueId } = req.params;
-    const leagueIdStr = Array.isArray(leagueId) ? leagueId[0] : leagueId;
-    if (!leagueIdStr) {
-      console.log('[categorias] ID de liga inválido:', leagueId);
-      return res.status(400).json({ ok: false, message: 'ID de liga inválido' });
+    let { categoryId } = req.query;
+    if (Array.isArray(leagueId)) leagueId = leagueId[0];
+    if (Array.isArray(categoryId)) categoryId = categoryId[0];
+    if (!leagueId || !categoryId || typeof categoryId !== 'string') {
+      return res.status(400).json({ message: 'Falta categoryId o leagueId' });
     }
-    const { categories } = req.body;
-    if (!Array.isArray(categories)) {
-      console.log('[categorias] Falta arreglo de categorías en body:', req.body);
-      return res.status(400).json({ ok: false, message: 'Falta arreglo de categorías' });
+    const teamsCollection = await getTeamsCollection();
+    const teams = await teamsCollection.find({ leagueId: leagueId, categoryId: categoryId }).toArray();
+    res.json({ data: teams });
+  } catch (err) {
+    console.error('[API] Error en /api/admin/leagues/:leagueId/teams:', err);
+    if (!res.headersSent) {
+      res.json({ data: [] });
     }
-    // Validación mínima de categorías
-    // Importar tipos reales
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { Category, RuleSet } = require('./data');
-    // Normalizar y validar reglas
-    const cats = (Array.isArray(categories) ? categories : []).map((cat: any) => {
-      // Si rules es null, dejarlo como null, si es objeto, validar campos mínimos
-      let rules = cat.rules;
-      if (rules && typeof rules === 'object') {
-        // Solo tomar campos válidos de RuleSet
-        rules = {
-          playersOnField: rules.playersOnField ?? 0,
-          matchMinutes: rules.matchMinutes ?? 0,
-          breakMinutes: rules.breakMinutes ?? 0,
-          allowDraws: !!rules.allowDraws,
-          pointsWin: rules.pointsWin ?? 0,
-          pointsDraw: rules.pointsDraw ?? 0,
-          pointsLoss: rules.pointsLoss ?? 0,
-        };
-      } else {
-        rules = null;
+  }
+});
+
+// Crear equipo en una liga (admin, autenticado)
+app.post('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
+  let timeoutHandle = null;
+  let responded = false;
+  try {
+    let user;
+    try {
+      user = await requireAuth(req, res);
+    } catch (authErr) {
+      if (!responded && !res.headersSent) {
+        res.status(401).json({ ok: false, message: 'No autenticado' });
+        responded = true;
       }
-      return {
-        id: cat.id,
-        name: cat.name,
-        minAge: cat.minAge,
-        maxAge: cat.maxAge ?? null,
-        rules,
-      };
-    });
-    for (const cat of cats) {
-      if (!cat.id || !cat.name || typeof cat.minAge !== 'number' || typeof cat.maxAge === 'undefined') {
-        console.log('[categorias] Datos de categoría inválidos:', cat);
-        return res.status(400).json({ ok: false, message: 'Datos de categoría inválidos' });
-      }
-      // Validar reglas si existen
-      if (cat.rules && typeof cat.rules.playersOnField !== 'number') {
-        return res.status(400).json({ ok: false, message: 'Reglas de categoría inválidas' });
-      }
+      return;
     }
-    console.log('[categorias] Actualizando categorías para liga:', leagueIdStr, 'Payload:', cats);
-    const collection = await getLeaguesCollection();
-    // Guardar las categorías y devolver el documento actualizado
-    const result = await collection.findOneAndUpdate(
-      { id: leagueIdStr },
-      { $set: { categories: cats } },
+    let { leagueId } = req.params;
+    const { categoryId, name, logoUrl, primaryColor, secondaryColor, technicalStaff } = req.body;
+    if (Array.isArray(leagueId)) leagueId = leagueId[0];
+    if (!leagueId || !categoryId || !name) {
+      res.status(400).json({ ok: false, message: 'Faltan datos obligatorios' });
+      return;
+    }
+    timeoutHandle = setTimeout(() => {
+      if (!responded) {
+        responded = true;
+        res.status(504).json({ ok: false, message: 'La transacción demoró demasiado y no se pudo completar. Intenta de nuevo.' });
+      }
+    }, 5000);
+    const teamsCollection = await getTeamsCollection();
+    // Validar unicidad de nombre de equipo en la misma liga y categoría
+    const existing = await teamsCollection.findOne({ leagueId, categoryId, name });
+    if (existing) {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      responded = true;
+      res.status(409).json({ ok: false, message: 'Ya existe un equipo con ese nombre en la categoría' });
+      return;
+    }
+    const newTeam = {
+      id: uuidv4(),
+      leagueId,
+      categoryId,
+      name,
+      logoUrl: logoUrl || '',
+      primaryColor: primaryColor || '',
+      secondaryColor: secondaryColor || '',
+      technicalStaff: technicalStaff || {},
+      players: [],
+      active: true,
+    };
+    await teamsCollection.insertOne(newTeam);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    responded = true;
+    res.json({ ok: true, data: newTeam });
+  } catch (err) {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (!responded) {
+      responded = true;
+      res.status(500).json({ ok: false, message: 'Error al crear equipo', error: String(err) });
+    }
+  }
+});
+
+// Modificar equipo (admin, autenticado)
+app.patch('/api/admin/teams/:teamId', requireAuth, async (req, res) => {
+  try {
+    let { teamId } = req.params;
+    if (Array.isArray(teamId)) teamId = teamId[0];
+    if (!teamId || typeof teamId !== 'string') {
+      return res.status(400).json({ ok: false, message: 'Falta teamId válido' });
+    }
+    const update = req.body;
+    const teamsCollection = await getTeamsCollection();
+    const result = await teamsCollection.findOneAndUpdate(
+      { id: teamId },
+      { $set: update },
       { returnDocument: 'after' }
     );
-    const updatedLeague = result && 'value' in result ? result.value as { categories: typeof cats } : null;
-    if (!updatedLeague) {
-      console.log('[categorias] Liga no encontrada para id:', leagueIdStr);
-      return res.status(404).json({ ok: false, message: 'Liga no encontrada' });
+    // Compatibilidad: algunos drivers retornan { value }, otros el doc directo
+    const updated = (result && 'value' in result) ? result.value : result;
+    if (!updated) {
+      return res.status(404).json({ ok: false, message: 'Equipo no encontrado' });
     }
-    console.log('[categorias] Categorías actualizadas correctamente para liga:', leagueIdStr);
-    res.json({ ok: true, message: 'Categorías actualizadas', data: updatedLeague.categories });
+    res.json({ ok: true, data: updated });
   } catch (err) {
-    console.error('[categorias] Error al actualizar categorías:', err);
-    res.status(500).json({ ok: false, message: 'Error al actualizar categorías', error: String(err) });
+    res.status(500).json({ ok: false, message: 'Error al modificar equipo', error: String(err) });
+  }
+});
+
+// Eliminar equipo (admin, autenticado)
+app.delete('/api/admin/teams/:teamId', requireAuth, async (req, res) => {
+  try {
+    let { teamId } = req.params;
+    if (Array.isArray(teamId)) teamId = teamId[0];
+    if (!teamId || typeof teamId !== 'string') {
+      return res.status(400).json({ ok: false, message: 'Falta teamId válido' });
+    }
+    const teamsCollection = await getTeamsCollection();
+    const result = await teamsCollection.deleteOne({ id: teamId });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ ok: false, message: 'Equipo no encontrado' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: 'Error al eliminar equipo', error: String(err) });
   }
 });
 
@@ -1133,27 +1188,7 @@ app.get('/api/admin/leagues/:leagueId/teams', async (req, res) => {
   }
 });
 // Crear equipo en una liga
-app.post('/api/admin/leagues/:leagueId/teams', async (req, res) => {
-  try {
-    const { leagueId } = req.params;
-    const { name, categoryId } = req.body;
-    if (!name || !categoryId) {
-      return res.status(400).json({ message: 'Faltan campos requeridos' });
-    }
-    const newTeam = {
-      id: (Math.random().toString(36).slice(2) + Date.now()),
-      leagueId,
-      categoryId,
-      name,
-      active: true,
-      players: [],
-    };
-    await saveTeamToMongo(newTeam);
-    res.json({ data: newTeam });
-  } catch (err) {
-    res.status(500).json({ message: 'Error al crear equipo', error: String(err) });
-  }
-});
+// ...el endpoint robusto ya está definido más arriba y permanece como la única versión activa...
 // Fixture público de una liga
 app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, res) => {
   try {
