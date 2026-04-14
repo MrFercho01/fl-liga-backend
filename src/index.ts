@@ -1,41 +1,3 @@
-// Endpoint: obtener reglas de una categoría específica de una liga (robusto para FE)
-app.get('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth, async (req, res) => {
-  try {
-    let { leagueId, categoryId } = req.params;
-    // Normaliza leagueId y categoryId a string
-    if (Array.isArray(leagueId)) leagueId = leagueId[0];
-    if (Array.isArray(categoryId)) categoryId = categoryId[0];
-    if (!leagueId || !categoryId) {
-      return res.status(400).json({ ok: false, message: 'Faltan parámetros de liga o categoría', data: {} });
-    }
-    const leaguesCollection = await getLeaguesCollection();
-    const league = await leaguesCollection.findOne({ id: leagueId });
-    if (!league) {
-      return res.status(404).json({ ok: false, message: 'Liga no encontrada', data: {} });
-    }
-    const categories = Array.isArray(league.categories) ? league.categories : [];
-    const category = categories.find((c) => c.id === categoryId);
-    if (!category) {
-      return res.status(404).json({ ok: false, message: 'Categoría no encontrada en la liga', data: {} });
-    }
-    // Estructura robusta de reglas
-    const defaultRules = {
-      playersOnField: 0,
-      matchMinutes: 0,
-      breakMinutes: 0,
-      allowDraws: false,
-      pointsWin: 0,
-      pointsDraw: 0,
-      pointsLoss: 0
-    };
-    const rules = (category.rules && typeof category.rules === 'object')
-      ? { ...defaultRules, ...category.rules }
-      : { ...defaultRules };
-    res.json({ ok: true, data: rules });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: 'Error al obtener reglas', error: String(err), data: {} });
-  }
-});
 import { app } from './server-stub';
 
 import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
@@ -139,6 +101,45 @@ app.use(cors({
 // Middleware para parsear JSON y formularios con límite aumentado
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+// Endpoint: obtener reglas de una categoría específica de una liga (robusto para FE)
+app.get('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth, async (req, res) => {
+  try {
+    let { leagueId, categoryId } = req.params;
+    // Normaliza leagueId y categoryId a string
+    if (Array.isArray(leagueId)) leagueId = leagueId[0];
+    if (Array.isArray(categoryId)) categoryId = categoryId[0];
+    if (!leagueId || !categoryId) {
+      return res.status(400).json({ ok: false, message: 'Faltan parámetros de liga o categoría', data: {} });
+    }
+    const leaguesCollection = await getLeaguesCollection();
+    const league = await leaguesCollection.findOne({ id: leagueId });
+    if (!league) {
+      return res.status(404).json({ ok: false, message: 'Liga no encontrada', data: {} });
+    }
+    const categories = Array.isArray(league.categories) ? league.categories : [];
+    const category = categories.find((c) => c.id === categoryId);
+    if (!category) {
+      return res.status(404).json({ ok: false, message: 'Categoría no encontrada en la liga', data: {} });
+    }
+    // Estructura robusta de reglas
+    const defaultRules = {
+      playersOnField: 0,
+      matchMinutes: 0,
+      breakMinutes: 0,
+      allowDraws: false,
+      pointsWin: 0,
+      pointsDraw: 0,
+      pointsLoss: 0
+    };
+    const rules = (category.rules && typeof category.rules === 'object')
+      ? { ...defaultRules, ...category.rules }
+      : { ...defaultRules };
+    res.json({ ok: true, data: rules });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: 'Error al obtener reglas', error: String(err), data: {} });
+  }
+});
 
 // Actualizar reglas de una categoría específica de una liga
 app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth, async (req, res) => {
