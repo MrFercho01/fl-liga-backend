@@ -143,10 +143,11 @@ app.get('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth
 
 // Actualizar reglas de una categoría específica de una liga
 app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth, async (req, res) => {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  let responded = false;
   try {
     let { leagueId, categoryId } = req.params;
     const { rules } = req.body;
-    // Normaliza leagueId y categoryId a string
     if (Array.isArray(leagueId)) leagueId = leagueId[0];
     if (Array.isArray(categoryId)) categoryId = categoryId[0];
     if (!leagueId || !categoryId) {
@@ -155,28 +156,44 @@ app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAu
     if (!rules || typeof rules !== 'object') {
       return res.status(400).json({ message: 'Faltan reglas a actualizar' });
     }
+    // Timeout de 5 segundos para evitar espera infinita
+    timeoutHandle = setTimeout(() => {
+      if (!responded) {
+        responded = true;
+        res.status(504).json({ ok: false, message: 'La transacción demoró demasiado y no se pudo completar. Intenta de nuevo.' });
+      }
+    }, 5000);
+
     const leaguesCollection = await getLeaguesCollection();
-    // Buscar la liga
+    // Actualiza solo el objeto rules de la categoría seleccionada
+    const updateResult = await leaguesCollection.updateOne(
+      { id: leagueId, "categories.id": categoryId },
+      { $set: { "categories.$.rules": rules } }
+    );
+    if (updateResult.matchedCount === 0) {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      responded = true;
+      return res.status(404).json({ ok: false, message: 'Liga o categoría no encontrada' });
+    }
+    // Devuelve la categoría actualizada
     const league = await leaguesCollection.findOne({ id: leagueId });
     if (!league) {
-      return res.status(404).json({ message: 'Liga no encontrada' });
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      responded = true;
+      return res.status(404).json({ ok: false, message: 'Liga no encontrada tras actualizar' });
     }
-    // Buscar la categoría
-    const categories = Array.isArray(league.categories) ? league.categories : [];
-    const catIdx = categories.findIndex((c: any) => c.id === categoryId);
-    if (catIdx === -1 || !categories[catIdx]) {
-      return res.status(404).json({ message: 'Categoría no encontrada en la liga' });
-    }
-    // Actualizar reglas
-    categories[catIdx].rules = { ...categories[catIdx].rules, ...rules };
-    // Guardar cambios
-    await leaguesCollection.updateOne(
-      { id: leagueId },
-      { $set: { categories } }
-    );
-    res.json({ ok: true, message: 'Reglas actualizadas', data: categories[catIdx] });
+    const category = Array.isArray(league.categories)
+      ? league.categories.find((c: any) => c.id === categoryId)
+      : undefined;
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    responded = true;
+    res.json({ ok: true, message: 'Reglas actualizadas', data: category });
   } catch (err) {
-    res.status(500).json({ message: 'Error al actualizar reglas', error: String(err) });
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (!responded) {
+      responded = true;
+      res.status(500).json({ ok: false, message: 'Error al actualizar reglas', error: String(err) });
+    }
   }
 });
 
