@@ -234,27 +234,6 @@ app.get('/api/leagues', async (req, res) => {
 });
 
 // Endpoint: obtener equipos registrados de una liga y categoría (compatibilidad FE)
-app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
-  try {
-    let { leagueId } = req.params;
-    let { categoryId } = req.query;
-    // Normalizar leagueId y categoryId a string
-    if (Array.isArray(leagueId)) leagueId = leagueId[0];
-    if (Array.isArray(categoryId)) categoryId = categoryId[0];
-    if (!leagueId || !categoryId || typeof categoryId !== 'string') {
-      return res.status(400).json({ message: 'Falta categoryId o leagueId' });
-    }
-    // Filtrar directamente en MongoDB para máxima eficiencia
-    const teamsCollection = await getTeamsCollection();
-    const teams = await teamsCollection.find({ leagueId: leagueId, categoryId: categoryId }).toArray();
-    res.json({ data: teams });
-  } catch (err) {
-    console.error('[API] Error en /api/admin/leagues/:leagueId/teams:', err);
-    if (!res.headersSent) {
-      res.json({ data: [] });
-    }
-  }
-});
 // Asegurar índice para máxima eficiencia en PATCH de reglas
 getLeaguesCollection().then(async (collection) => {
   try {
@@ -268,25 +247,6 @@ getLeaguesCollection().then(async (collection) => {
 // --- ENDPOINTS TEAMS ADMIN ---
 
 // Obtener equipos de una liga y categoría (admin, autenticado)
-app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
-  try {
-    let { leagueId } = req.params;
-    let { categoryId } = req.query;
-    if (Array.isArray(leagueId)) leagueId = leagueId[0];
-    if (Array.isArray(categoryId)) categoryId = categoryId[0];
-    if (!leagueId || !categoryId || typeof categoryId !== 'string') {
-      return res.status(400).json({ message: 'Falta categoryId o leagueId' });
-    }
-    const teamsCollection = await getTeamsCollection();
-    const teams = await teamsCollection.find({ leagueId: leagueId, categoryId: categoryId }).toArray();
-    res.json({ data: teams });
-  } catch (err) {
-    console.error('[API] Error en /api/admin/leagues/:leagueId/teams:', err);
-    if (!res.headersSent) {
-      res.json({ data: [] });
-    }
-  }
-});
 
 // ...el endpoint robusto y validado permanece como la única versión activa más adelante en el archivo...
 
@@ -1116,15 +1076,44 @@ app.delete('/api/admin/teams/:teamId', async (req, res) => {
   }
 });
 // Listar equipos de una liga y categoría
-app.get('/api/admin/leagues/:leagueId/teams', async (req, res) => {
+// Versión robusta y única de GET /api/admin/leagues/:leagueId/teams
+app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
   try {
-    const { leagueId } = req.params;
-    const { categoryId } = req.query;
-    const teams = await getAllTeamsFromMongo();
-    const filtered = teams.filter((t) => t.leagueId === leagueId && t.categoryId === categoryId);
-    res.json({ data: filtered });
+    let { leagueId } = req.params;
+    let { categoryId } = req.query;
+    if (Array.isArray(leagueId)) leagueId = leagueId[0];
+    if (Array.isArray(categoryId)) categoryId = categoryId[0];
+    if (!leagueId || !categoryId || typeof categoryId !== 'string') {
+      res.status(400).json({ message: 'Falta categoryId o leagueId' });
+      return;
+    }
+    const teamsCollection = await getTeamsCollection();
+    // Timeout de 5 segundos para evitar espera infinita
+    let responded = false;
+    const timeoutHandle = setTimeout(() => {
+      if (!responded) {
+        responded = true;
+        res.status(504).json({ message: 'La consulta demoró demasiado y no se pudo completar. Intenta de nuevo.' });
+      }
+    }, 5000);
+    let teams = [];
+    try {
+      teams = await teamsCollection.find({ leagueId: leagueId, categoryId: categoryId }).toArray();
+    } catch (err) {
+      if (!responded) {
+        responded = true;
+        clearTimeout(timeoutHandle);
+        res.status(500).json({ message: 'Error al obtener equipos', error: String(err) });
+      }
+      return;
+    }
+    if (!responded) {
+      responded = true;
+      clearTimeout(timeoutHandle);
+      res.json({ data: teams });
+    }
   } catch (err) {
-    res.status(500).json({ message: 'Error al obtener equipos', error: String(err) });
+    res.status(500).json({ message: 'Error inesperado al obtener equipos', error: String(err) });
   }
 });
 // Crear equipo en una liga
