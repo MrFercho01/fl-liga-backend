@@ -102,6 +102,8 @@ app.use(cors({
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
+
+
 // Endpoint: obtener reglas de una categoría específica de una liga (robusto para FE)
 app.get('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth, async (req, res) => {
   try {
@@ -244,56 +246,10 @@ getLeaguesCollection().then(async (collection) => {
   }
 });
 
-// --- ENDPOINTS TEAMS ADMIN ---
 
-// Obtener equipos de una liga y categoría (admin, autenticado)
 
-// ...el endpoint robusto y validado permanece como la única versión activa más adelante en el archivo...
 
-// Modificar equipo (admin, autenticado)
-app.patch('/api/admin/teams/:teamId', requireAuth, async (req, res) => {
-  try {
-    let { teamId } = req.params;
-    if (Array.isArray(teamId)) teamId = teamId[0];
-    if (!teamId || typeof teamId !== 'string') {
-      return res.status(400).json({ ok: false, message: 'Falta teamId válido' });
-    }
-    const update = req.body;
-    const teamsCollection = await getTeamsCollection();
-    const result = await teamsCollection.findOneAndUpdate(
-      { id: teamId },
-      { $set: update },
-      { returnDocument: 'after' }
-    );
-    // Compatibilidad: algunos drivers retornan { value }, otros el doc directo
-    const updated = (result && 'value' in result) ? result.value : result;
-    if (!updated) {
-      return res.status(404).json({ ok: false, message: 'Equipo no encontrado' });
-    }
-    res.json({ ok: true, data: updated });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: 'Error al modificar equipo', error: String(err) });
-  }
-});
-
-// Eliminar equipo (admin, autenticado)
-app.delete('/api/admin/teams/:teamId', requireAuth, async (req, res) => {
-  try {
-    let { teamId } = req.params;
-    if (Array.isArray(teamId)) teamId = teamId[0];
-    if (!teamId || typeof teamId !== 'string') {
-      return res.status(400).json({ ok: false, message: 'Falta teamId válido' });
-    }
-    const teamsCollection = await getTeamsCollection();
-    const result = await teamsCollection.deleteOne({ id: teamId });
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ ok: false, message: 'Equipo no encontrado' });
-    }
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: 'Error al eliminar equipo', error: String(err) });
-  }
-});
+// (Aquí se deben mover y agrupar los demás endpoints de teams: GET, POST, PATCH, DELETE, y los de jugadores)
 
 // --- ENDPOINTS ADMIN ROUND AWARDS Y PLAYED MATCHES ---
 // Obtener mejores jugadoras por fecha (todas las rondas de una liga/categoría)
