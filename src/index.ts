@@ -1034,6 +1034,8 @@ app.delete('/api/admin/teams/:teamId', async (req, res) => {
 // Listar equipos de una liga y categoría
 // Versión robusta y única de GET /api/admin/leagues/:leagueId/teams
 app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
+  let responded = false;
+  let timeoutHandle = null;
   try {
     let { leagueId } = req.params;
     let { categoryId } = req.query;
@@ -1042,47 +1044,58 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
     leagueId = typeof leagueId === 'string' ? leagueId.trim() : '';
     categoryId = typeof categoryId === 'string' ? categoryId.trim() : '';
     if (!leagueId || !categoryId) {
-      res.status(400).json({ message: 'Falta categoryId o leagueId' });
+      res.status(400).json({ data: [], message: 'Falta categoryId o leagueId' });
       return;
     }
-    const teamsCollection = await getTeamsCollection();
-    let responded = false;
-    const timeoutHandle = setTimeout(() => {
+    timeoutHandle = setTimeout(() => {
       if (!responded) {
         responded = true;
-        res.status(504).json({ message: 'La consulta demoró demasiado y no se pudo completar. Intenta de nuevo.' });
+        console.error(`[API] Timeout equipos: liga ${leagueId}, categoría ${categoryId}`);
+        res.status(504).json({ data: [], message: 'Timeout: la consulta demoró demasiado.' });
       }
     }, 5000);
     let teams = [];
+    let allTeams = [];
     try {
-      // Buscar todos los equipos y normalizar campos
-      const allTeams = await teamsCollection.find({}).toArray();
-      // Log de conteo total
-      console.log(`[API] Total equipos en BD: ${allTeams.length}`);
-      // Normalizar y filtrar
+      const teamsCollection = await getTeamsCollection();
+      allTeams = await teamsCollection.find({}).toArray();
+      console.log(`[API] [teams] Total en BD: ${allTeams.length}`);
+    } catch (err) {
+      console.error('[API] Error accediendo a MongoDB teams:', err);
+      if (!responded) {
+        responded = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        res.status(500).json({ data: [], message: 'Error accediendo a MongoDB teams', error: String(err) });
+      }
+      return;
+    }
+    try {
       teams = allTeams.filter(t => {
         const tLeague = typeof t.leagueId === 'string' ? t.leagueId.trim() : '';
         const tCat = typeof t.categoryId === 'string' ? t.categoryId.trim() : '';
         return tLeague === leagueId && tCat === categoryId && (typeof t.active !== 'boolean' || t.active);
       });
-      console.log(`[API] Equipos filtrados para liga ${leagueId}, categoría ${categoryId}: ${teams.length}`);
+      console.log(`[API] [teams] Filtrados para liga ${leagueId}, categoría ${categoryId}: ${teams.length}`);
     } catch (err) {
+      console.error('[API] Error filtrando equipos:', err);
       if (!responded) {
         responded = true;
-        clearTimeout(timeoutHandle);
-        res.status(500).json({ message: 'Error al obtener equipos', error: String(err) });
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        res.status(500).json({ data: [], message: 'Error filtrando equipos', error: String(err) });
       }
       return;
     }
     if (!responded) {
       responded = true;
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       res.json({ data: teams });
     }
   } catch (err) {
     console.error('[API] Error inesperado al obtener equipos:', err);
-    if (!res.headersSent) {
-      res.status(500).json({ message: 'Error inesperado al obtener equipos', error: String(err) });
+    if (!responded) {
+      responded = true;
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      res.status(500).json({ data: [], message: 'Error inesperado al obtener equipos', error: String(err) });
     }
   }
 });
