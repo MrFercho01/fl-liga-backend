@@ -1039,12 +1039,13 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
     let { categoryId } = req.query;
     if (Array.isArray(leagueId)) leagueId = leagueId[0];
     if (Array.isArray(categoryId)) categoryId = categoryId[0];
-    if (!leagueId || !categoryId || typeof categoryId !== 'string') {
+    leagueId = typeof leagueId === 'string' ? leagueId.trim() : '';
+    categoryId = typeof categoryId === 'string' ? categoryId.trim() : '';
+    if (!leagueId || !categoryId) {
       res.status(400).json({ message: 'Falta categoryId o leagueId' });
       return;
     }
     const teamsCollection = await getTeamsCollection();
-    // Timeout de 5 segundos para evitar espera infinita
     let responded = false;
     const timeoutHandle = setTimeout(() => {
       if (!responded) {
@@ -1054,7 +1055,17 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
     }, 5000);
     let teams = [];
     try {
-      teams = await teamsCollection.find({ leagueId: leagueId, categoryId: categoryId }).toArray();
+      // Buscar todos los equipos y normalizar campos
+      const allTeams = await teamsCollection.find({}).toArray();
+      // Log de conteo total
+      console.log(`[API] Total equipos en BD: ${allTeams.length}`);
+      // Normalizar y filtrar
+      teams = allTeams.filter(t => {
+        const tLeague = typeof t.leagueId === 'string' ? t.leagueId.trim() : '';
+        const tCat = typeof t.categoryId === 'string' ? t.categoryId.trim() : '';
+        return tLeague === leagueId && tCat === categoryId && (typeof t.active !== 'boolean' || t.active);
+      });
+      console.log(`[API] Equipos filtrados para liga ${leagueId}, categoría ${categoryId}: ${teams.length}`);
     } catch (err) {
       if (!responded) {
         responded = true;
@@ -1069,7 +1080,10 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
       res.json({ data: teams });
     }
   } catch (err) {
-    res.status(500).json({ message: 'Error inesperado al obtener equipos', error: String(err) });
+    console.error('[API] Error inesperado al obtener equipos:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Error inesperado al obtener equipos', error: String(err) });
+    }
   }
 });
 // Crear equipo en una liga
