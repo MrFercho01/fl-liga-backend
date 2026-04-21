@@ -1060,6 +1060,10 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
       const teamsCollection = await getTeamsCollection();
       allTeams = await teamsCollection.find({}).toArray();
       console.log(`[API] [teams] Total en BD: ${allTeams.length}`);
+      // Log detallado de todos los equipos
+      allTeams.forEach((t, idx) => {
+        console.log(`[API] [teams][${idx}] id=${t.id} leagueId=${t.leagueId} categoryId=${t.categoryId} active=${t.active}`);
+      });
     } catch (err) {
       console.error('[API] Error accediendo a MongoDB teams:', err);
       if (!responded) {
@@ -1073,9 +1077,17 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
       teams = allTeams.filter(t => {
         const tLeague = typeof t.leagueId === 'string' ? t.leagueId.trim() : '';
         const tCat = typeof t.categoryId === 'string' ? t.categoryId.trim() : '';
-        return tLeague === leagueId && tCat === categoryId && (typeof t.active !== 'boolean' || t.active);
+        const isActive = (typeof t.active !== 'boolean' || t.active);
+        const match = tLeague === leagueId && tCat === categoryId && isActive;
+        if (match) {
+          console.log(`[API] [teams][MATCH] id=${t.id} leagueId=${t.leagueId} categoryId=${t.categoryId} active=${t.active}`);
+        }
+        return match;
       });
       console.log(`[API] [teams] Filtrados para liga ${leagueId}, categoría ${categoryId}: ${teams.length}`);
+      teams.forEach((t, idx) => {
+        console.log(`[API] [teams][RESULT][${idx}] id=${t.id} leagueId=${t.leagueId} categoryId=${t.categoryId} active=${t.active}`);
+      });
     } catch (err) {
       console.error('[API] Error filtrando equipos:', err);
       if (!responded) {
