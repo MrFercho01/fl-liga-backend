@@ -370,6 +370,7 @@ export interface PlayedMatchPlayerStats {
   playerId: string
   playerName: string
   teamId: string
+  lastActiveAt?: string
   teamName: string
   position: string
   goals: number
