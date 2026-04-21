@@ -1,3 +1,33 @@
+// Nuevo endpoint limpio para obtener equipos por liga y categoría (prueba)
+app.get('/api/admin/leagues/:leagueId/equipos', requireAuth, async (req, res) => {
+  try {
+    let { leagueId } = req.params;
+    let { categoryId } = req.query;
+    if (Array.isArray(leagueId)) leagueId = leagueId[0];
+    if (Array.isArray(categoryId)) categoryId = categoryId[0];
+    leagueId = typeof leagueId === 'string' ? leagueId.trim().toLowerCase() : '';
+    categoryId = typeof categoryId === 'string' ? categoryId.trim().toLowerCase() : '';
+    if (!leagueId || !categoryId) {
+      return res.status(400).json({ data: [], message: 'Falta categoryId o leagueId' });
+    }
+    const teamsCollection = await getTeamsCollection();
+    // Filtrar directamente en MongoDB
+    const query = {
+      leagueId: leagueId,
+      categoryId: categoryId,
+      $or: [
+        { active: { $exists: false } },
+        { active: true }
+      ]
+    };
+    const equipos = await teamsCollection.find(query).toArray();
+    console.log(`[API] [equipos] Consulta directa MongoDB:`, query, `=> encontrados: ${equipos.length}`);
+    return res.json({ data: equipos });
+  } catch (err) {
+    console.error('[API] Error en /api/admin/leagues/:leagueId/equipos:', err);
+    return res.status(500).json({ data: [], message: 'Error obteniendo equipos', error: String(err) });
+  }
+});
 import { app } from './server-stub';
 
 import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
