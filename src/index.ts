@@ -1074,24 +1074,16 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
       return;
     }
     try {
-      teams = allTeams.filter(t => {
-        const tLeague = typeof t.leagueId === 'string' ? t.leagueId.trim() : '';
-        const tCat = typeof t.categoryId === 'string' ? t.categoryId.trim() : '';
-        const isActive = (typeof t.active !== 'boolean' || t.active);
-        const match = tLeague === leagueId && tCat === categoryId && isActive;
-        if (match) {
-          console.log(`[API] [teams][MATCH] id=${t.id} leagueId=${t.leagueId} categoryId=${t.categoryId} active=${t.active}`);
-        }
-        return match;
-      });
-      console.log(`[API] [teams] Filtrados para liga ${leagueId}, categoría ${categoryId}: ${teams.length}`);
+      // DEV: Quitar filtros, devolver todos los equipos para prueba visual FE
+      teams = allTeams;
+      console.log(`[API] [teams] DEV: Sin filtro, total equipos enviados: ${teams.length}`);
       if (!responded) {
         responded = true;
         if (timeoutHandle) clearTimeout(timeoutHandle);
         res.json({ data: teams });
       }
     } catch (err) {
-      console.error('[API] Error inesperado al filtrar equipos:', err);
+      console.error('[API] Error inesperado al devolver equipos:', err);
       if (!responded) {
         responded = true;
         if (timeoutHandle) clearTimeout(timeoutHandle);
