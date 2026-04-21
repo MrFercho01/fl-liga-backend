@@ -1008,7 +1008,7 @@ app.post('/api/admin/teams/:teamId/players', async (req, res) => {
       age,
       number,
       position,
-      registrationStatus: "registered" as const,
+      registrationStatus: 'registered' as 'registered'
     };
     team.players.push(newPlayer);
     await saveTeamToMongo(team);
@@ -1085,22 +1085,18 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
         return match;
       });
       console.log(`[API] [teams] Filtrados para liga ${leagueId}, categoría ${categoryId}: ${teams.length}`);
-      teams.forEach((t, idx) => {
-        console.log(`[API] [teams][RESULT][${idx}] id=${t.id} leagueId=${t.leagueId} categoryId=${t.categoryId} active=${t.active}`);
-      });
-    } catch (err) {
-      console.error('[API] Error filtrando equipos:', err);
       if (!responded) {
         responded = true;
         if (timeoutHandle) clearTimeout(timeoutHandle);
-        res.status(500).json({ data: [], message: 'Error filtrando equipos', error: String(err) });
+        res.json({ data: teams });
       }
-      return;
-    }
-    if (!responded) {
-      responded = true;
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      res.json({ data: teams });
+    } catch (err) {
+      console.error('[API] Error inesperado al filtrar equipos:', err);
+      if (!responded) {
+        responded = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        res.status(500).json({ data: [], message: 'Error inesperado al obtener equipos', error: String(err) });
+      }
     }
   } catch (err) {
     console.error('[API] Error inesperado al obtener equipos:', err);
@@ -1109,77 +1105,6 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
       if (timeoutHandle) clearTimeout(timeoutHandle);
       res.status(500).json({ data: [], message: 'Error inesperado al obtener equipos', error: String(err) });
     }
-  }
-});
-// Crear equipo en una liga
-// ...el endpoint robusto ya está definido más arriba y permanece como la única versión activa...
-// Fixture público de una liga
-app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, res) => {
-  try {
-    const { clientId, leagueId } = req.params;
-    const { categoryId } = req.query;
-    if (!categoryId) {
-      console.warn(`[API] Faltante categoryId en fixture público`);
-      return res.json({ data: {}, message: 'Falta categoryId' });
-    }
-    const leagues = await getAllLeaguesFromMongo();
-    const league = leagues.find(l => l.id === leagueId);
-    if (!league) {
-      console.warn(`[API] Liga no encontrada: ${leagueId}`);
-      return res.json({ data: {}, message: 'Liga no encontrada' });
-    }
-    const category = league.categories.find(c => c.id === categoryId);
-    if (!category) {
-      console.warn(`[API] Categoría no encontrada: ${categoryId}`);
-      return res.json({ data: {}, message: 'Categoría no encontrada' });
-    }
-    const allTeams = await getAllTeamsFromMongo();
-    const teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
-    const allSchedules = await getAllFixtureSchedulesFromMongo();
-    const schedule = allSchedules.filter(s => s.leagueId === leagueId && s.categoryId === categoryId);
-    type FixtureRound = { round: number, matches: { matchId: string }[] };
-    const fixture: FixtureRound[] = [];
-    for (const s of schedule) {
-      let roundObj = fixture.find(r => r.round === s.round);
-      if (!roundObj) {
-        roundObj = { round: s.round, matches: [] };
-        fixture.push(roundObj);
-      }
-      roundObj.matches.push({ matchId: s.matchId });
-    }
-    const allPlayed = await getAllPlayedMatchesFromMongo();
-    const playedMatches = allPlayed.filter(m => m.leagueId === leagueId && m.categoryId === categoryId);
-    const playedMatchIds = playedMatches.map(m => m.matchId);
-    const allAwards = await getAllRoundAwardsFromMongo();
-    const roundAwards = allAwards.filter(a => a.leagueId === leagueId && a.categoryId === categoryId);
-    console.log(`[API] Fixture público: liga ${leagueId}, categoría ${categoryId}, equipos ${teams.length}, partidos ${playedMatches.length}`);
-    res.json({
-      data: {
-        league: {
-          id: league.id,
-          name: league.name,
-          country: league.country,
-          season: league.season,
-          slogan: league.slogan,
-          themeColor: league.themeColor,
-          backgroundImageUrl: league.backgroundImageUrl,
-          logoUrl: league.logoUrl
-        },
-        category: {
-          id: category.id,
-          name: category.name
-        },
-        teams,
-        fixture,
-        schedule,
-        playedMatchIds,
-        playedMatches,
-        roundAwards
-      }
-    });
-  } catch (err) {
-    console.error('[API] Error en /api/public/client/:clientId/leagues/:leagueId/fixture:', err);
-    res.json({ data: {}, message: 'Error al obtener fixture público' });
   }
 });
 // Actualizar engagement de un partido público
