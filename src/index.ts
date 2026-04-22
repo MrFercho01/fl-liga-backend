@@ -102,36 +102,6 @@ app.use(cors({
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
-// Nuevo endpoint limpio para obtener equipos por liga y categoría (prueba)
-app.get('/api/admin/leagues/:leagueId/equipos', requireAuth, async (req, res) => {
-  try {
-    let { leagueId } = req.params;
-    let { categoryId } = req.query;
-    if (Array.isArray(leagueId)) leagueId = leagueId[0];
-    if (Array.isArray(categoryId)) categoryId = categoryId[0];
-    leagueId = typeof leagueId === 'string' ? leagueId.trim().toLowerCase() : '';
-    categoryId = typeof categoryId === 'string' ? categoryId.trim().toLowerCase() : '';
-    if (!leagueId || !categoryId) {
-      return res.status(400).json({ data: [], message: 'Falta categoryId o leagueId' });
-    }
-    const teamsCollection = await getTeamsCollection();
-    // Filtrar directamente en MongoDB
-    const query = {
-      leagueId: leagueId,
-      categoryId: categoryId,
-      $or: [
-        { active: { $exists: false } },
-        { active: true }
-      ]
-    };
-    const equipos = await teamsCollection.find(query).toArray();
-    console.log(`[API] [equipos] Consulta directa MongoDB:`, query, `=> encontrados: ${equipos.length}`);
-    return res.json({ data: equipos });
-  } catch (err) {
-    console.error('[API] Error en /api/admin/leagues/:leagueId/equipos:', err);
-    return res.status(500).json({ data: [], message: 'Error obteniendo equipos', error: String(err) });
-  }
-});
 
 
 
@@ -1064,10 +1034,10 @@ app.delete('/api/admin/teams/:teamId', async (req, res) => {
 });
 // Listar equipos de una liga y categoría
 // Versión robusta y única de GET /api/admin/leagues/:leagueId/teams
-app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
-  let responded = false;
-  let timeoutHandle = null;
+app.get('/api/admin/leagues/:leagueId/teams', async (req, res) => {
   try {
+    // Autenticación igual que /api/leagues
+    const user = await requireAuth(req, res);
     let { leagueId } = req.params;
     let { categoryId } = req.query;
     if (Array.isArray(leagueId)) leagueId = leagueId[0];
@@ -1078,44 +1048,22 @@ app.get('/api/admin/leagues/:leagueId/teams', requireAuth, async (req, res) => {
       res.status(400).json({ data: [], message: 'Falta categoryId o leagueId' });
       return;
     }
-    timeoutHandle = setTimeout(() => {
-      if (!responded) {
-        responded = true;
-        console.error(`[API] Timeout equipos: liga ${leagueId}, categoría ${categoryId}`);
-        res.status(504).json({ data: [], message: 'Timeout: la consulta demoró demasiado.' });
-      }
-    }, 5000);
-    try {
-      const teamsCollection = await getTeamsCollection();
-      // Filtrar directamente en MongoDB para eficiencia y robustez
-      const query = {
-        leagueId: leagueId,
-        categoryId: categoryId,
-        $or: [
-          { active: { $exists: false } },
-          { active: true }
-        ]
-      };
-      const teams = await teamsCollection.find(query).toArray();
-      console.log(`[API] [teams] Consulta directa MongoDB:`, query, `=> encontrados: ${teams.length}`);
-      if (!responded) {
-        responded = true;
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-        res.json({ data: teams });
-      }
-    } catch (err) {
-      console.error('[API] Error accediendo o filtrando equipos en MongoDB:', err);
-      if (!responded) {
-        responded = true;
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-        res.status(500).json({ data: [], message: 'Error accediendo a MongoDB teams', error: String(err) });
-      }
-    }
+    const teamsCollection = await getTeamsCollection();
+    // Filtrar directamente en MongoDB para eficiencia y robustez
+    const query = {
+      leagueId: leagueId,
+      categoryId: categoryId,
+      $or: [
+        { active: { $exists: false } },
+        { active: true }
+      ]
+    };
+    const teams = await teamsCollection.find(query).toArray();
+    console.log(`[API] [teams] Consulta directa MongoDB:`, query, `=> encontrados: ${teams.length}`);
+    res.json({ data: teams });
   } catch (err) {
     console.error('[API] Error inesperado al obtener equipos:', err);
-    if (!responded) {
-      responded = true;
-      if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (!res.headersSent) {
       res.status(500).json({ data: [], message: 'Error inesperado al obtener equipos', error: String(err) });
     }
   }
