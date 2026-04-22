@@ -995,7 +995,7 @@ app.delete('/api/admin/teams/:teamId/players/:playerId', async (req, res) => {
 app.post('/api/admin/teams/:teamId/players', async (req, res) => {
   try {
     const { teamId } = req.params;
-    const { name, nickname, age, number, position } = req.body;
+    const { name, nickname, age, number, position, photoUrl } = req.body;
     if (!name || !nickname || !age || !number || !position) {
       return res.status(400).json({ message: 'Faltan campos requeridos' });
     }
@@ -1009,6 +1009,7 @@ app.post('/api/admin/teams/:teamId/players', async (req, res) => {
       age,
       number,
       position,
+      photoUrl: photoUrl || '',
       registrationStatus: 'registered' as 'registered'
     };
     team.players.push(newPlayer);
