@@ -1662,7 +1662,10 @@ export const updateLeagueSchema = z.object({
   name: z.string().min(2).optional(),
   slug: z.string().min(2).optional(),
   country: z.string().min(2).optional(),
-  season: z.string().min(2).optional(),
+  season: z.union([
+    z.number().int().min(2020).max(2100),
+    z.string().trim().regex(/^\d{4}$/),
+  ]).optional(),
   slogan: z.string().optional(),
   themeColor: z.string().optional(),
   backgroundImageUrl: z.string().optional(),
