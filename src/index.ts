@@ -481,14 +481,83 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
     const allSchedules = await getAllFixtureSchedulesFromMongo();
     const schedule = allSchedules.filter((entry) => entry.leagueId === leagueId && entry.categoryId === categoryId);
 
+    // Build fixture rounds from saved schedule entries so matchIds stay consistent.
+    // Fall back to generating round-robin when there are no schedule entries at all.
+    let fixtureRounds: ReturnType<typeof generateFixture>;
+    if (schedule.length > 0) {
+      // Reconstruct rounds from schedule matchIds (index-based or manual)
+      const roundsMap = new Map<number, Array<{ homeTeamId: string; awayTeamId: string | null; hasBye: boolean }>>();
+      const addedKeys = new Set<string>();
+      for (const entry of schedule) {
+        const matchId = entry.matchId;
+        let homeTeamId: string | null = null;
+        let awayTeamId: string | null = null;
+
+        if (matchId.startsWith('manual__')) {
+          const parts = matchId.split('__');
+          homeTeamId = parts[2] ?? null;
+          awayTeamId = parts[3] ?? null;
+        } else {
+          // Index-based: "<round>-<idx>-<uuidHome(4 hyphens)>-<uuidAway(4 hyphens)>"
+          // round + idx are plain numbers, UUIDs are 5 segments each
+          const segs = matchId.split('-');
+          if (segs.length >= 13) {
+            homeTeamId = segs.slice(2, 7).join('-');
+            awayTeamId = segs.slice(7, 12).join('-');
+          }
+        }
+
+        if (!homeTeamId || !awayTeamId) continue;
+        const key = `${entry.round}:${homeTeamId}:${awayTeamId}`;
+        if (addedKeys.has(key)) continue;
+        addedKeys.add(key);
+
+        if (!roundsMap.has(entry.round)) roundsMap.set(entry.round, []);
+        roundsMap.get(entry.round)!.push({ homeTeamId, awayTeamId, hasBye: false });
+      }
+
+      // Also add played matches that may not be in schedule anymore
+      const allPlayedRaw = await getAllPlayedMatchesFromMongo();
+      const playedForLeague = allPlayedRaw.filter((m) => m.leagueId === leagueId && m.categoryId === categoryId);
+      for (const pm of playedForLeague) {
+        const matchId = pm.matchId;
+        let homeTeamId: string | null = null;
+        let awayTeamId: string | null = null;
+        const round = pm.round;
+        if (matchId.startsWith('manual__')) {
+          const parts = matchId.split('__');
+          homeTeamId = parts[2] ?? null;
+          awayTeamId = parts[3] ?? null;
+        } else {
+          const segs = matchId.split('-');
+          if (segs.length >= 13) {
+            homeTeamId = segs.slice(2, 7).join('-');
+            awayTeamId = segs.slice(7, 12).join('-');
+          }
+        }
+        if (!homeTeamId || !awayTeamId || !round) continue;
+        const key = `${round}:${homeTeamId}:${awayTeamId}`;
+        if (addedKeys.has(key)) continue;
+        addedKeys.add(key);
+        if (!roundsMap.has(round)) roundsMap.set(round, []);
+        roundsMap.get(round)!.push({ homeTeamId, awayTeamId, hasBye: false });
+      }
+
+      fixtureRounds = Array.from(roundsMap.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([round, matches]) => ({ round, matches }));
+    } else {
+      fixtureRounds = generateFixture(teams);
+    }
+
     const fixture = {
       teamsCount: teams.length,
       hasBye: teams.length % 2 !== 0,
-      rounds: generateFixture(teams),
+      rounds: fixtureRounds,
     };
 
-    // Partidos jugados
-    const allPlayed = await getAllPlayedMatchesFromMongo();
+    // Partidos jugados (reuse allPlayedRaw fetched above when available)
+    const allPlayed = typeof allPlayedRaw !== 'undefined' ? allPlayedRaw : await getAllPlayedMatchesFromMongo();
     const playedMatches = allPlayed.filter((match) => match.leagueId === leagueId && match.categoryId === categoryId);
     const playedMatchIds = playedMatches.map((match) => match.matchId);
 
