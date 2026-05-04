@@ -484,6 +484,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
     // Build fixture rounds from saved schedule entries so matchIds stay consistent.
     // Fall back to generating round-robin when there are no schedule entries at all.
     let fixtureRounds: ReturnType<typeof generateFixture>;
+    const allPlayedRaw = await getAllPlayedMatchesFromMongo();
     if (schedule.length > 0) {
       // Reconstruct rounds from schedule matchIds (index-based or manual)
       const roundsMap = new Map<number, Array<{ homeTeamId: string; awayTeamId: string | null; hasBye: boolean }>>();
@@ -517,7 +518,6 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
       }
 
       // Also add played matches that may not be in schedule anymore
-      const allPlayedRaw = await getAllPlayedMatchesFromMongo();
       const playedForLeague = allPlayedRaw.filter((m) => m.leagueId === leagueId && m.categoryId === categoryId);
       for (const pm of playedForLeague) {
         const matchId = pm.matchId;
@@ -556,9 +556,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
       rounds: fixtureRounds,
     };
 
-    // Partidos jugados (reuse allPlayedRaw fetched above when available)
-    const allPlayed = typeof allPlayedRaw !== 'undefined' ? allPlayedRaw : await getAllPlayedMatchesFromMongo();
-    const playedMatches = allPlayed.filter((match) => match.leagueId === leagueId && match.categoryId === categoryId);
+    // Partidos jugados
+    const playedMatches = allPlayedRaw.filter((match) => match.leagueId === leagueId && match.categoryId === categoryId);
     const playedMatchIds = playedMatches.map((match) => match.matchId);
 
     const allAwards = await getAllRoundAwardsFromMongo();
