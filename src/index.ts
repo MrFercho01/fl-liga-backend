@@ -406,6 +406,49 @@ function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
   return res.status(403).json({ message: 'No autorizado' });
 }
 
+const normalizePublicClientValue = (value: string): string =>
+  (value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+
+async function resolvePublicClientIdStrict(clientId: string): Promise<{ resolvedClientId: string; organizationName?: string } | null> {
+  const rawClientId = (clientId || '').trim();
+  if (!rawClientId) return null;
+
+  const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  if (uuidRegex.test(rawClientId)) {
+    return { resolvedClientId: rawClientId };
+  }
+
+  const normalizedClientId = normalizePublicClientValue(rawClientId);
+  const usersCollection = await getUsersCollection();
+  const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
+
+  const user = allUsers.find((u) => {
+    const publicPath = typeof u.publicPortalPath === 'string' ? u.publicPortalPath : '';
+    const pathSlug = publicPath.replace(/^\/cliente\//, '').trim();
+    const legacySlugValue = (u as Record<string, unknown>)['slug'];
+    const legacySlug = typeof legacySlugValue === 'string' ? legacySlugValue.trim() : '';
+
+    return (
+      u.id === rawClientId
+      || pathSlug === rawClientId
+      || legacySlug === rawClientId
+      || normalizePublicClientValue(pathSlug) === normalizedClientId
+      || normalizePublicClientValue(legacySlug) === normalizedClientId
+      || normalizePublicClientValue(u.organizationName ?? '') === normalizedClientId
+    );
+  }) ?? null;
+
+  if (!user) return null;
+  return {
+    resolvedClientId: user.id,
+    ...(user.organizationName ? { organizationName: user.organizationName } : {}),
+  };
+}
+
 // Endpoint de logs de auditoría solo para super_admin
 app.get('/api/admin/audit-logs', requireSuperAdmin, async (req, res) => {
   try {
@@ -433,45 +476,13 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
       return res.status(400).json({ message: 'Falta categoryId' });
     }
 
-    // Resolución de clientId (acepta UUID, publicPortalPath, slug legacy y organizationName)
-    let resolvedClientId = clientId;
-    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    const normalize = (str: string): string =>
-      (str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9]/g, '');
-
-    let user: any = null;
-    if (!uuidRegex.test(clientId.trim())) {
-      const usersCollection = await getUsersCollection();
-      const rawClientId = clientId.trim();
-      const normalizedClientId = normalize(rawClientId);
-      const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
-
-      user = allUsers.find((u) => {
-        const publicPath = typeof u.publicPortalPath === 'string' ? u.publicPortalPath : '';
-        const pathSlug = publicPath.replace(/^\/cliente\//, '').trim();
-        const legacySlugValue = (u as Record<string, unknown>)['slug'];
-        const legacySlug = typeof legacySlugValue === 'string' ? legacySlugValue.trim() : '';
-        return (
-          pathSlug === rawClientId
-          || legacySlug === rawClientId
-          || normalize(pathSlug) === normalizedClientId
-          || normalize(legacySlug) === normalizedClientId
-          || normalize(u.organizationName ?? '') === normalizedClientId
-        );
-      }) ?? null;
-
-      if (user) {
-        resolvedClientId = user.id;
-        console.log(`[API] Cliente encontrado: ${user.organizationName} (${user.id})`);
-      } else {
-        console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
-        return res.status(404).json({ message: 'Cliente no encontrado' });
-      }
+    const resolvedClient = await resolvePublicClientIdStrict(clientId);
+    if (!resolvedClient) {
+      console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
+      return res.status(404).json({ message: 'Cliente no encontrado' });
     }
+    const resolvedClientId = resolvedClient.resolvedClientId;
+    console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
     // Buscar liga y categoría
     const allLeagues = await getAllLeaguesFromMongo();
@@ -615,32 +626,13 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/played-matches', async (
       return res.json({ data: [], message: 'Falta categoryId' });
     }
 
-    // Resolución de clientId (acepta slug o UUID)
-    let resolvedClientId = clientId;
-    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    function normalize(str: string): string {
-      return (str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[ -\u007f]/g, '')
-        .replace(/[^a-z0-9]/g, '');
+    const resolvedClient = await resolvePublicClientIdStrict(clientId);
+    if (!resolvedClient) {
+      console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
+      return res.json({ data: [], message: 'Cliente no encontrado' });
     }
-    let user = null;
-    if (!uuidRegex.test(clientId.trim())) {
-      const usersCollection = await getUsersCollection();
-      user = await usersCollection.findOne({ slug: clientId.trim() });
-      if (!user) {
-        const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
-        user = allUsers.find(u => normalize(u.organizationName ?? '') === normalize(clientId)) || null;
-      }
-      if (user) {
-        resolvedClientId = user.id;
-        console.log(`[API] Cliente encontrado: ${user.organizationName} (${user.id})`);
-      } else {
-        console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
-        return res.json({ data: [], message: 'Cliente no encontrado' });
-      }
-    }
+    const resolvedClientId = resolvedClient.resolvedClientId;
+    console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
     // Buscar liga y categoría
     const allLeagues = await getAllLeaguesFromMongo();
@@ -675,32 +667,13 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/highlight-videos', async
       return res.json({ data: [], message: 'Falta categoryId' });
     }
 
-    // Resolución de clientId (acepta slug o UUID)
-    let resolvedClientId = clientId;
-    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    function normalize(str: string): string {
-      return (str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[ -]/g, '')
-        .replace(/[^a-z0-9]/g, '');
+    const resolvedClient = await resolvePublicClientIdStrict(clientId);
+    if (!resolvedClient) {
+      console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
+      return res.json({ data: [], message: 'Cliente no encontrado' });
     }
-    let user = null;
-    if (!uuidRegex.test(clientId.trim())) {
-      const usersCollection = await getUsersCollection();
-      user = await usersCollection.findOne({ slug: clientId.trim() });
-      if (!user) {
-        const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
-        user = allUsers.find(u => normalize(u.organizationName ?? '') === normalize(clientId)) || null;
-      }
-      if (user) {
-        resolvedClientId = user.id;
-        console.log(`[API] Cliente encontrado: ${user.organizationName} (${user.id})`);
-      } else {
-        console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
-        return res.json({ data: [], message: 'Cliente no encontrado' });
-      }
-    }
+    const resolvedClientId = resolvedClient.resolvedClientId;
+    console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
     // Buscar liga y categoría
     const allLeagues = await getAllLeaguesFromMongo();
@@ -736,32 +709,13 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/teams', async (req, res)
       return res.json({ data: [], message: 'Falta categoryId' });
     }
 
-    // Resolución de clientId (acepta slug o UUID)
-    let resolvedClientId = clientId;
-    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    function normalize(str: string): string {
-      return (str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[0-]/g, '')
-        .replace(/[^a-z0-9]/g, '');
+    const resolvedClient = await resolvePublicClientIdStrict(clientId);
+    if (!resolvedClient) {
+      console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
+      return res.json({ data: [], message: 'Cliente no encontrado' });
     }
-    let user = null;
-    if (!uuidRegex.test(clientId.trim())) {
-      const usersCollection = await getUsersCollection();
-      user = await usersCollection.findOne({ slug: clientId.trim() });
-      if (!user) {
-        const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
-        user = allUsers.find(u => normalize(u.organizationName ?? '') === normalize(clientId)) || null;
-      }
-      if (user) {
-        resolvedClientId = user.id;
-        console.log(`[API] Cliente encontrado: ${user.organizationName} (${user.id})`);
-      } else {
-        console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
-        return res.json({ data: [], message: 'Cliente no encontrado' });
-      }
-    }
+    const resolvedClientId = resolvedClient.resolvedClientId;
+    console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
     // Buscar liga y categoría
     const allLeagues = await getAllLeaguesFromMongo();
@@ -1167,32 +1121,13 @@ app.get('/api/public/client/:clientId/matches/:matchId/engagement', async (req, 
       return res.json({ data: {}, message: 'Falta matchId' });
     }
 
-    // Resolución de clientId (acepta slug o UUID)
-    let resolvedClientId = clientId;
-    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    function normalize(str: string): string {
-      return (str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[ -\u007f]/g, '')
-        .replace(/[^a-z0-9]/g, '');
+    const resolvedClient = await resolvePublicClientIdStrict(clientId);
+    if (!resolvedClient) {
+      console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
+      return res.json({ data: {}, message: 'Cliente no encontrado' });
     }
-    let user = null;
-    if (!uuidRegex.test(clientId.trim())) {
-      const usersCollection = await getUsersCollection();
-      user = await usersCollection.findOne({ slug: clientId.trim() });
-      if (!user) {
-        const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
-        user = allUsers.find(u => normalize(u.organizationName ?? '') === normalize(clientId)) || null;
-      }
-      if (user) {
-        resolvedClientId = user.id;
-        console.log(`[API] Cliente encontrado: ${user.organizationName} (${user.id})`);
-      } else {
-        console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
-        return res.json({ data: {}, message: 'Cliente no encontrado' });
-      }
-    }
+    const resolvedClientId = resolvedClient.resolvedClientId;
+    console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
     // Engagement de partido
     const engagement = await getMatchEngagement(resolvedClientId, matchId);
@@ -1235,31 +1170,13 @@ app.get('/api/public/client/:clientId/engagement', async (req, res) => {
 app.get('/api/public/client/:clientId/leagues', async (req, res) => {
   try {
     const { clientId } = req.params;
-    let resolvedClientId = clientId;
-    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    function normalize(str: string): string {
-      return (str || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9]/g, '');
+    const resolvedClient = await resolvePublicClientIdStrict(clientId);
+    if (!resolvedClient) {
+      console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
+      return res.json({ data: [], message: 'Cliente no encontrado' });
     }
-    let user = null;
-    if (!uuidRegex.test(clientId.trim())) {
-      const usersCollection = await getUsersCollection();
-      user = await usersCollection.findOne({ slug: clientId.trim() });
-      if (!user) {
-        const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
-        user = allUsers.find(u => normalize(u.organizationName ?? '') === normalize(clientId)) || null;
-      }
-      if (user) {
-        resolvedClientId = user.id;
-        console.log(`[API] Cliente encontrado: ${user.organizationName} (${user.id})`);
-      } else {
-        console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
-        return res.json({ data: [], message: 'Cliente no encontrado' });
-      }
-    }
+    const resolvedClientId = resolvedClient.resolvedClientId;
+    console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
     const allLeagues = await getAllLeaguesFromMongo();
     const leagues = allLeagues.filter(l => l.ownerUserId === resolvedClientId && l.active);
     console.log(`[API] Ligas encontradas para cliente ${resolvedClientId}: ${leagues.length}`);
