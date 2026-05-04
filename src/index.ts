@@ -995,7 +995,7 @@ app.delete('/api/admin/teams/:teamId/players/:playerId', async (req, res) => {
 app.post('/api/admin/teams/:teamId/players', async (req, res) => {
   try {
     const { teamId } = req.params;
-    const { name, nickname, age, number, position, photoUrl } = req.body;
+    const { name, nickname, age, number, position, photoUrl, registrationStatus } = req.body;
     if (!name || !nickname || !age || !number || !position) {
       return res.status(400).json({ message: 'Faltan campos requeridos' });
     }
@@ -1010,11 +1010,11 @@ app.post('/api/admin/teams/:teamId/players', async (req, res) => {
       number,
       position,
       photoUrl: photoUrl || '',
-      registrationStatus: 'registered' as 'registered'
+      registrationStatus: registrationStatus === 'pending' ? 'pending' as const : 'registered' as const
     };
     team.players.push(newPlayer);
     await saveTeamToMongo(team);
-    res.json({ data: newPlayer });
+    res.json({ data: team });
   } catch (err) {
     res.status(500).json({ message: 'Error al agregar jugador', error: String(err) });
   }
