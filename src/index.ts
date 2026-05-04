@@ -1705,6 +1705,13 @@ app.post('/api/auth/login', async (req, res) => {
     if (user.mustChangePassword) {
       return res.status(403).json({ code: 'MUST_CHANGE_PASSWORD', message: 'Debes cambiar tu contraseña antes de continuar.' });
     }
+    // Renovar lastActiveAt al iniciar sesión para evitar falsos positivos de sesión expirada
+    try {
+      const usersCol = await getUsersCollection();
+      await usersCol.updateOne({ id: user.id }, { $set: { lastActiveAt: new Date().toISOString() } });
+    } catch (e) {
+      console.warn('[login] No se pudo actualizar lastActiveAt:', e);
+    }
     res.json({ data: { token: user.id, user } });
   
   } catch (err) {
