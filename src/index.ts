@@ -428,10 +428,9 @@ app.get('/api/admin/audit-logs', requireSuperAdmin, async (req, res) => {
 app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, res) => {
   try {
     const { clientId, leagueId } = req.params;
-    const { categoryId } = req.query;
+    const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
     if (!categoryId) {
-      console.warn(`[API] Faltante categoryId en fixture público`);
-      return res.json({ data: {}, message: 'Falta categoryId' });
+      return res.status(400).json({ message: 'Falta categoryId' });
     }
 
     // Resolución de clientId (acepta slug o UUID)
@@ -457,7 +456,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
         console.log(`[API] Cliente encontrado: ${user.organizationName} (${user.id})`);
       } else {
         console.warn(`[API] Cliente no encontrado para clientId: ${clientId}`);
-        return res.json({ data: {}, message: 'Cliente no encontrado' });
+        return res.status(404).json({ message: 'Cliente no encontrado' });
       }
     }
 
@@ -466,41 +465,35 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
     const league = allLeagues.find(l => l.id === leagueId && l.ownerUserId === resolvedClientId && l.active);
     if (!league) {
       console.warn(`[API] Liga no encontrada o no pertenece al cliente: ${leagueId}`);
-      return res.json({ data: {}, message: 'Liga no encontrada' });
+      return res.status(404).json({ message: 'Liga no encontrada' });
     }
     const category = league.categories?.find(c => c.id === categoryId) || null;
     if (!category) {
       console.warn(`[API] Categoría no encontrada en la liga: ${categoryId}`);
-      return res.json({ data: {}, message: 'Categoría no encontrada en la liga' });
+      return res.status(404).json({ message: 'Categoría no encontrada en la liga' });
     }
-
-    // Buscar fixture schedule
-    const allSchedules = await getAllFixtureSchedulesFromMongo();
-    const schedule = allSchedules.filter(s => s.leagueId === leagueId && s.categoryId === categoryId);
-    // Estructura de rondas
-    type FixtureRound = { round: number, matches: { matchId: string }[] };
-    const fixture: FixtureRound[] = [];
-    for (const s of schedule) {
-      let roundObj = fixture.find(r => r.round === s.round);
-      if (!roundObj) {
-        roundObj = { round: s.round, matches: [] };
-        fixture.push(roundObj);
-      }
-      roundObj.matches.push({ matchId: s.matchId });
-    }
-
-    // Partidos jugados
-    const allPlayed = await getAllPlayedMatchesFromMongo();
-    const playedMatches = allPlayed.filter(m => m.leagueId === leagueId && m.categoryId === categoryId);
-    const playedMatchIds = playedMatches.map(m => m.matchId);
-
-
-    const allAwards = await getAllRoundAwardsFromMongo();
-    const roundAwards = allAwards.filter(a => a.leagueId === leagueId && a.categoryId === categoryId);
 
     // Obtener equipos de la liga/categoría
     const allTeams = await getAllTeamsFromMongo();
-    const teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
+    const teams = allTeams.filter((team) => team.leagueId === leagueId && team.categoryId === categoryId && isTeamActive(team));
+
+    // Buscar fixture schedule
+    const allSchedules = await getAllFixtureSchedulesFromMongo();
+    const schedule = allSchedules.filter((entry) => entry.leagueId === leagueId && entry.categoryId === categoryId);
+
+    const fixture = {
+      teamsCount: teams.length,
+      hasBye: teams.length % 2 !== 0,
+      rounds: generateFixture(teams),
+    };
+
+    // Partidos jugados
+    const allPlayed = await getAllPlayedMatchesFromMongo();
+    const playedMatches = allPlayed.filter((match) => match.leagueId === leagueId && match.categoryId === categoryId);
+    const playedMatchIds = playedMatches.map((match) => match.matchId);
+
+    const allAwards = await getAllRoundAwardsFromMongo();
+    const roundAwards = allAwards.filter((award) => award.leagueId === leagueId && award.categoryId === categoryId);
 
     res.json({
       data: {
@@ -528,7 +521,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
     });
   } catch (err) {
     console.error('[API] Error en /api/public/client/:clientId/leagues/:leagueId/fixture:', err);
-    res.json({ data: {}, message: 'Error al obtener fixture público' });
+    res.status(500).json({ message: 'Error al obtener fixture público' });
   }
 });
 // Endpoint público: obtener partidos jugados de una liga/categoría para un cliente
