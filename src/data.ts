@@ -210,7 +210,7 @@ export const getLeaguesCollection = async () => {
 export const saveLeagueToMongo = async (league: League) => {
   console.log('Guardando liga en MongoDB:', JSON.stringify(league, null, 2));
   const collection = await getLeaguesCollection();
-  await collection.insertOne(league);
+  await collection.replaceOne({ id: league.id }, league, { upsert: true });
 };
 
 export const getAllLeaguesFromMongo = async (): Promise<League[]> => {
