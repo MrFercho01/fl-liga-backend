@@ -433,24 +433,37 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
       return res.status(400).json({ message: 'Falta categoryId' });
     }
 
-    // Resolución de clientId (acepta slug o UUID)
+    // Resolución de clientId (acepta UUID, publicPortalPath, slug legacy y organizationName)
     let resolvedClientId = clientId;
     const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    function normalize(str: string): string {
-      return (str || '')
+    const normalize = (str: string): string =>
+      (str || '')
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[ -\u007f]/g, '')
+        .replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-z0-9]/g, '');
-    }
-    let user = null;
+
+    let user: any = null;
     if (!uuidRegex.test(clientId.trim())) {
       const usersCollection = await getUsersCollection();
-      user = await usersCollection.findOne({ slug: clientId.trim() });
-      if (!user) {
-        const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
-        user = allUsers.find(u => normalize(u.organizationName ?? '') === normalize(clientId)) || null;
-      }
+      const rawClientId = clientId.trim();
+      const normalizedClientId = normalize(rawClientId);
+      const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
+
+      user = allUsers.find((u) => {
+        const publicPath = typeof u.publicPortalPath === 'string' ? u.publicPortalPath : '';
+        const pathSlug = publicPath.replace(/^\/cliente\//, '').trim();
+        const legacySlugValue = (u as Record<string, unknown>)['slug'];
+        const legacySlug = typeof legacySlugValue === 'string' ? legacySlugValue.trim() : '';
+        return (
+          pathSlug === rawClientId
+          || legacySlug === rawClientId
+          || normalize(pathSlug) === normalizedClientId
+          || normalize(legacySlug) === normalizedClientId
+          || normalize(u.organizationName ?? '') === normalizedClientId
+        );
+      }) ?? null;
+
       if (user) {
         resolvedClientId = user.id;
         console.log(`[API] Cliente encontrado: ${user.organizationName} (${user.id})`);
