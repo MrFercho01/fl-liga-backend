@@ -3292,69 +3292,36 @@ const lineupSchema = z.object({
   formationKey: z.string().trim().min(1).optional(),
 })
 
-app.post('/api/admin/live/lineup', (request, response) => {
-  const user = requireAuth(request, response)
-  if (!user) return
+app.post('/api/admin/live/lineup', async (request, response) => {
+  try {
+    const user = await requireAuth(request, response)
+    if (!user) return
 
-  const parsed = lineupSchema.safeParse(request.body)
-  if (!parsed.success) {
-    response.status(400).json({ message: 'Payload inválido' })
-    return
+    const parsed = lineupSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({ message: 'Payload inválido' })
+      return
+    }
+
+    const result = updateLineupWithFormation(
+      parsed.data.teamId,
+      parsed.data.starters,
+      parsed.data.substitutes,
+      parsed.data.formationKey,
+    )
+    if (!result.ok) {
+      response.status(400).json({ message: result.message })
+      return
+    }
+
+    const { liveMatchStore } = require('./live')
+    await saveLiveMatchToMongo(liveMatchStore)
+
+    broadcastLive()
+    response.json({ data: buildLiveSnapshot() })
+  } catch (error) {
+    response.status(500).json({ message: 'Error al guardar alineación', error: String(error) })
   }
-
-  const result = updateLineupWithFormation(
-    parsed.data.teamId,
-    parsed.data.starters,
-    parsed.data.substitutes,
-    parsed.data.formationKey,
-  )
-  if (!result.ok) {
-    response.status(400).json({ message: result.message })
-    return
-  }
-
-  // Si el partido está finalizado, persistir la alineación en el registro jugado
-  const { liveMatchStore } = require('./live');
-  const { savePlayedMatchToMongo } = require('./data');
-  if (liveMatchStore.status === 'finished') {
-    // Buscar el registro jugado correspondiente en MongoDB y actualizar la alineación
-    // (Para simplificar, se guarda un nuevo registro jugado con la alineación actualizada)
-    const matchRecord = {
-      matchId: liveMatchStore.id,
-      leagueId: liveMatchStore.leagueId || '',
-      categoryId: liveMatchStore.categoryId || '',
-      round: liveMatchStore.round || 0,
-      finalMinute: liveMatchStore.timer ? Math.floor((liveMatchStore.timer.elapsedSeconds || 0) / 60) : 0,
-      homeTeamName: liveMatchStore.homeTeam.name,
-      awayTeamName: liveMatchStore.awayTeam.name,
-      homeStats: liveMatchStore.homeTeam.stats,
-      awayStats: liveMatchStore.awayTeam.stats,
-      penaltyShootout: liveMatchStore.penaltyShootout,
-      playerOfMatchId: liveMatchStore.playerOfMatchId,
-      playerOfMatchName: liveMatchStore.playerOfMatchName,
-      homeLineup: {
-        starters: liveMatchStore.homeTeam.starters,
-        substitutes: liveMatchStore.homeTeam.substitutes,
-        formationKey: liveMatchStore.homeTeam.formationKey,
-      },
-      awayLineup: {
-        starters: liveMatchStore.awayTeam.starters,
-        substitutes: liveMatchStore.awayTeam.substitutes,
-        formationKey: liveMatchStore.awayTeam.formationKey,
-      },
-      players: liveMatchStore.players || [],
-      goals: liveMatchStore.goals || [],
-      events: liveMatchStore.events || [],
-      highlightVideos: liveMatchStore.highlightVideos || [],
-      playedAt: liveMatchStore.playedAt || new Date().toISOString(),
-    };
-    savePlayedMatchToMongo(matchRecord).catch((err: any) => {
-      console.error('Error guardando alineación en partido jugado:', err);
-    });
-  }
-
-  broadcastLive()
-  response.json({ data: buildLiveSnapshot() })
 })
 
 const liveEventSchema = z.object({
