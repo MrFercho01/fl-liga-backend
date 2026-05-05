@@ -3089,7 +3089,7 @@ app.get('/api/public/videos/:videoId', async (request, response) => {
 })
 
 const loadLiveMatchSchema = z.object({
-  matchId: z.string().uuid(),
+  matchId: z.string().min(1),
   leagueId: z.string().uuid(),
   categoryId: z.string().uuid(),
   homeTeamId: z.string().uuid(),
@@ -3294,7 +3294,7 @@ app.delete('/api/admin/leagues/:leagueId', async (request, response) => {
 })
 
 const timerActionSchema = z.object({
-  matchId: z.string().uuid(),
+  matchId: z.string().min(1),
   action: z.enum(['start', 'stop', 'reset', 'finish']),
 })
 
@@ -3320,7 +3320,7 @@ app.post('/api/admin/live/timer', (request, response) => {
 
 // --- Lineup schema (corregido fuera del PATCH) ---
 const lineupSchema = z.object({
-  matchId: z.string().uuid(),
+  matchId: z.string().min(1),
   teamId: z.string().uuid(),
   starters: z.array(z.string().uuid()),
   substitutes: z.array(z.string().uuid()),
@@ -3362,7 +3362,7 @@ app.post('/api/admin/live/lineup', async (request, response) => {
 })
 
 const liveEventSchema = z.object({
-  matchId: z.string().uuid(),
+  matchId: z.string().min(1),
   teamId: z.string().uuid(),
   playerId: z.string().uuid().nullable(),
   substitutionInPlayerId: z.string().uuid().optional(),
