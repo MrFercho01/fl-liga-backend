@@ -746,22 +746,6 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/teams', async (req, res)
   }
 });
 
-// Registrar evento en vivo (persistente, multi-partido)
-app.post('/api/admin/live/events', async (req, res) => {
-  try {
-    const { matchId, event } = req.body;
-    if (!matchId || !event) return res.status(400).json({ message: 'Faltan datos: matchId y event' });
-    const match = await getPlayedMatchById(matchId);
-    if (!match) return res.status(404).json({ message: 'Partido en vivo no encontrado' });
-    match.events = match.events || [];
-    match.events.push(event);
-    await saveLiveMatchToMongo(match);
-    res.json({ data: { status: 'event-registered', event } });
-  } catch (err) {
-    res.status(500).json({ message: 'Error al registrar evento en vivo', error: String(err) });
-  }
-});
-
 // Endpoint engagement público robusto
 app.get('/api/public/client/:clientId/leagues/:leagueId/engagement', async (req, res) => {
   try {
