@@ -176,12 +176,16 @@ export const getPlayedMatchesCollection = async () => {
 export const savePlayedMatchToMongo = async (match: PlayedMatchRecord) => {
   console.log('Guardando played match en MongoDB:', JSON.stringify(match, null, 2));
   const collection = await getPlayedMatchesCollection();
-  await collection.insertOne(match);
+  await collection.replaceOne(
+    { leagueId: match.leagueId, categoryId: match.categoryId, matchId: match.matchId },
+    match,
+    { upsert: true },
+  );
 };
 
 export const getAllPlayedMatchesFromMongo = async (): Promise<PlayedMatchRecord[]> => {
   const collection = await getPlayedMatchesCollection();
-  return collection.find({}).toArray();
+  return collection.find({}).sort({ playedAt: -1, _id: -1 }).toArray();
 };
 
 export const getHighlightVideosCollection = async () => {
@@ -193,12 +197,17 @@ export const getHighlightVideosCollection = async () => {
 export const saveHighlightVideoToMongo = async (video: MatchHighlightVideo) => {
   console.log('Guardando highlight video en MongoDB:', JSON.stringify(video, null, 2));
   const collection = await getHighlightVideosCollection();
-  await collection.insertOne(video);
+  await collection.replaceOne({ id: video.id }, video, { upsert: true });
 };
 
 export const getAllHighlightVideosFromMongo = async (): Promise<MatchHighlightVideo[]> => {
   const collection = await getHighlightVideosCollection();
   return collection.find({}).toArray();
+};
+
+export const deleteHighlightVideoFromMongo = async (videoId: string) => {
+  const collection = await getHighlightVideosCollection();
+  await collection.deleteOne({ id: videoId });
 };
 // --- Persistencia granular de ligas ---
 export const getLeaguesCollection = async () => {
@@ -364,7 +373,10 @@ export interface MatchHighlightVideo {
   id: string
   name: string
   url: string
-  leagueId: string;
+  leagueId: string
+  categoryId?: string
+  matchId?: string
+  createdAt?: string
 }
 
 export interface PlayedMatchPlayerStats {

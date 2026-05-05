@@ -18,6 +18,7 @@ import {
   getAllPlayedMatchesFromMongo,
   savePlayedMatchToMongo,
   saveHighlightVideoToMongo,
+  deleteHighlightVideoFromMongo,
   getVideosBucket,
   getMongoObjectId,
   getPlayedMatchesCollection
@@ -2896,7 +2897,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', async (r
 
   // Buscar partido en MongoDB
   const allMatches = await getAllPlayedMatchesFromMongo();
-  const match = allMatches.find(
+  const match = [...allMatches].find(
     (item) => item.leagueId === league.id && item.categoryId === parsed.data.categoryId && item.matchId === request.params.matchId,
   );
   if (!match) {
@@ -2908,9 +2909,17 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', async (r
     name: parsed.data.name,
     url: parsed.data.url,
     leagueId: league.id,
+    categoryId: parsed.data.categoryId,
+    matchId: request.params.matchId,
+    createdAt: new Date().toISOString(),
   }
+  const nextMatch = {
+    ...match,
+    highlightVideos: [...(match.highlightVideos || []), video],
+  }
+  await savePlayedMatchToMongo(nextMatch)
   await saveHighlightVideoToMongo(video)
-  response.json({ data: { ...match, highlightVideos: [...(match.highlightVideos || []), video] } })
+  response.json({ data: nextMatch })
 })
 
 app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', upload.single('video'), async (request: any, response) => {
@@ -2942,7 +2951,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
     return
   }
   const allMatches = await getAllPlayedMatchesFromMongo();
-  const match = allMatches.find(
+  const match = [...allMatches].find(
     (item) => item.leagueId === league.id && item.categoryId === parsed.data.categoryId && item.matchId === request.params.matchId,
   )
   if (!match) {
@@ -2986,9 +2995,17 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
       name: finalName,
       url: buildPublicVideoUrl(request, fileId),
       leagueId: league.id,
+      categoryId: parsed.data.categoryId,
+      matchId: request.params.matchId,
+      createdAt: new Date().toISOString(),
     }
+    const nextMatch = {
+      ...match,
+      highlightVideos: [...(match.highlightVideos || []), video],
+    }
+    await savePlayedMatchToMongo(nextMatch)
     await saveHighlightVideoToMongo(video)
-    response.json({ data: { ...match, highlightVideos: [...(match.highlightVideos || []), video] } })
+    response.json({ data: nextMatch })
   } catch {
     response.status(500).json({ message: 'No se pudo procesar/cargar el video' })
   }
@@ -3010,16 +3027,20 @@ app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId
   }
   const categoryId = String(request.query.categoryId ?? '')
   const allMatches = await getAllPlayedMatchesFromMongo();
-  const match = allMatches.find(
+  const match = [...allMatches].find(
     (item) => item.leagueId === league.id && item.categoryId === categoryId && item.matchId === request.params.matchId,
   )
   if (!match) {
     response.status(404).json({ message: 'Partido jugado no encontrado' })
     return
   }
-  // Eliminar video de la colección highlight_videos (puedes implementar deleteHighlightVideoFromMongo)
-  // Por ahora solo responde éxito
-  response.json({ data: match })
+  const nextMatch = {
+    ...match,
+    highlightVideos: (match.highlightVideos || []).filter((video) => video.id !== request.params.videoId),
+  }
+  await savePlayedMatchToMongo(nextMatch)
+  await deleteHighlightVideoFromMongo(request.params.videoId)
+  response.json({ data: nextMatch })
 })
 
 app.get('/api/public/videos/:videoId', async (request, response) => {
