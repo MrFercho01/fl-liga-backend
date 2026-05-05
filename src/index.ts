@@ -68,6 +68,7 @@ import {
 } from './data';
 // ENDPOINTS AVANZADOS COMENTADOS PARA COMPILACIÓN LIMPIA
 import { buildTeamNameAliases, resolveTeamFromAliasMap } from './team-alias';
+import { vapidPublicKey, addPushSubscription, removePushSubscription, sendPushToMatch } from './webpush';
 
 // Importar SUPER_ADMIN_USER_ID
 import { SUPER_ADMIN_USER_ID } from './data';
@@ -3396,6 +3397,23 @@ app.post('/api/admin/live/events', (request, response) => {
   }
 
   broadcastLive(matchId)
+
+  // Web Push: notificar a seguidores del partido según tipo de evento
+  const pushMessages: Record<string, { title: string; body: string; tag: string }> = {
+    goal:          { title: '⚽ ¡GOL!',           body: 'Se ha marcado un gol',             tag: 'goal' },
+    own_goal:      { title: '⚽ ¡Autogol!',        body: 'Se ha marcado un autogol',         tag: 'own_goal' },
+    penalty_goal:  { title: '⚽ ¡Penal convertido!', body: 'Gol de penal marcado',           tag: 'penalty_goal' },
+    penalty_miss:  { title: '❌ Penal fallado',    body: 'El penal fue detenido/fallado',     tag: 'penalty_miss' },
+    yellow:        { title: '🟨 Tarjeta amarilla', body: 'Tarjeta amarilla mostrada',         tag: 'yellow' },
+    red:           { title: '🟥 Tarjeta roja',     body: 'Tarjeta roja mostrada',             tag: 'red' },
+    double_yellow: { title: '🟨🟥 Doble amarilla',  body: 'Expulsión por doble amarilla',     tag: 'double_yellow' },
+    substitution:  { title: '🔄 Sustitución',      body: 'Cambio de jugador realizado',       tag: 'substitution' },
+  }
+  const pm = pushMessages[parsed.data.type]
+  if (pm) {
+    void sendPushToMatch(matchId, pm.title, pm.body, pm.tag)
+  }
+
   response.json({ data: buildLiveSnapshot(matchId) })
 })
 
@@ -3427,6 +3445,43 @@ app.post('/api/admin/live/events/delete', (request, response) => {
 app.get('/api/live', (_request, response) => {
   response.json({ data: buildAllLiveSnapshots() })
 })
+
+// ─── Web Push endpoints ────────────────────────────────────────────────────────
+app.get('/api/push/vapid-public-key', (_request, response) => {
+  response.json({ key: vapidPublicKey });
+})
+
+const pushSubscribeSchema = z.object({
+  matchId: z.string().min(1),
+  subscription: z.object({
+    endpoint: z.string().url(),
+    keys: z.object({
+      p256dh: z.string(),
+      auth: z.string(),
+    }),
+  }),
+})
+
+app.post('/api/push/subscribe', (request, response) => {
+  const parsed = pushSubscribeSchema.safeParse(request.body)
+  if (!parsed.success) {
+    response.status(400).json({ message: 'Payload inválido' })
+    return
+  }
+  addPushSubscription(parsed.data.matchId, parsed.data.subscription as any)
+  response.json({ ok: true })
+})
+
+app.post('/api/push/unsubscribe', (request, response) => {
+  const parsed = pushSubscribeSchema.safeParse(request.body)
+  if (!parsed.success) {
+    response.status(400).json({ message: 'Payload inválido' })
+    return
+  }
+  removePushSubscription(parsed.data.matchId, parsed.data.subscription as any)
+  response.json({ ok: true })
+})
+// ──────────────────────────────────────────────────────────────────────────────
 
 // En producción, los eventos live:update se emiten por socket.io
 // En desarrollo, se mantiene el stub/broadcastLive local
