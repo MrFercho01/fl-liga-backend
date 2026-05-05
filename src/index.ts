@@ -32,6 +32,7 @@ import {
   syncTeamInAllMatches,
   updateLineupWithFormation,
   registerEvent,
+  undoLastEvent,
   buildLiveSnapshot,
   buildAllLiveSnapshots,
   loadMatchForLive,
@@ -2747,6 +2748,7 @@ const playedMatchSchema = z.object({
       type: z.enum([
         'shot',
         'goal',
+        'own_goal',
         'penalty_goal',
         'penalty_miss',
         'yellow',
@@ -3354,6 +3356,7 @@ const liveEventSchema = z.object({
   type: z.enum([
     'shot',
     'goal',
+    'own_goal',
     'penalty_goal',
     'penalty_miss',
     'yellow',
@@ -3394,6 +3397,30 @@ app.post('/api/admin/live/events', (request, response) => {
 
   broadcastLive(matchId)
   response.json({ data: buildLiveSnapshot(matchId) })
+})
+
+const undoLiveEventSchema = z.object({
+  matchId: z.string().min(1),
+})
+
+app.post('/api/admin/live/events/undo', (request, response) => {
+  const user = requireAuth(request, response)
+  if (!user) return
+
+  const parsed = undoLiveEventSchema.safeParse(request.body)
+  if (!parsed.success) {
+    response.status(400).json({ message: 'Payload inválido' })
+    return
+  }
+
+  const result = undoLastEvent(parsed.data.matchId)
+  if (!result.ok) {
+    response.status(400).json({ message: result.message })
+    return
+  }
+
+  broadcastLive(parsed.data.matchId)
+  response.json({ data: buildLiveSnapshot(parsed.data.matchId) })
 })
 
 app.get('/api/live', (_request, response) => {

@@ -5,6 +5,7 @@ import type { RegisteredTeam } from './data'
 export type LiveEventType =
   | 'shot'
   | 'goal'
+  | 'own_goal'
   | 'penalty_goal'
   | 'penalty_miss'
   | 'yellow'
@@ -169,6 +170,14 @@ const findTeam = (store: LiveMatch, teamId: string): TeamLive | null => {
   return null
 }
 
+const findOpponentTeam = (store: LiveMatch, teamId: string): TeamLive | null => {
+  if (store.homeTeam.id === teamId) return store.awayTeam
+  if (store.awayTeam.id === teamId) return store.homeTeam
+  return null
+}
+
+const decrement = (value: number): number => Math.max(0, value - 1)
+
 export const syncLiveTeamFromRegistered = (matchId: string, team: RegisteredTeam, playersOnField: number): boolean => {
   const store = getStore(matchId)
   if (!store) return false
@@ -321,7 +330,8 @@ export const setMatchStatusAction = (matchId: string, action: 'finish') => {
   }
 }
 
-const applyStatByEvent = (team: TeamLive, eventType: LiveEventType, playerId: string | null, staffRole?: LiveStaffRole) => {
+const applyStatByEvent = (store: LiveMatch, team: TeamLive, eventType: LiveEventType, playerId: string | null, staffRole?: LiveStaffRole) => {
+  const opponent = findOpponentTeam(store, team.id)
   if (eventType === 'staff_yellow' || eventType === 'staff_red') {
     if (!staffRole) return
     const s = team.staffDiscipline[staffRole]
@@ -331,6 +341,7 @@ const applyStatByEvent = (team: TeamLive, eventType: LiveEventType, playerId: st
   }
   if (eventType === 'shot') team.stats.shots += 1
   if (eventType === 'goal') team.stats.goals += 1
+  if (eventType === 'own_goal' && opponent) opponent.stats.goals += 1
   if (eventType === 'penalty_goal') { team.stats.goals += 1; team.stats.shots += 1 }
   if (eventType === 'penalty_miss') team.stats.shots += 1
   if (eventType === 'yellow') team.stats.yellows += 1
@@ -350,6 +361,57 @@ const applyStatByEvent = (team: TeamLive, eventType: LiveEventType, playerId: st
   if (eventType === 'assist') ps.assists += 1
   if (eventType === 'red' || eventType === 'double_yellow') {
     if (!team.redCarded.includes(playerId)) team.redCarded.push(playerId)
+  }
+}
+
+const reverseStatByEvent = (store: LiveMatch, team: TeamLive, eventType: LiveEventType, playerId: string | null, staffRole?: LiveStaffRole) => {
+  const opponent = findOpponentTeam(store, team.id)
+  if (eventType === 'staff_yellow' || eventType === 'staff_red') {
+    if (!staffRole) return
+    const s = team.staffDiscipline[staffRole]
+    if (eventType === 'staff_yellow') s.yellows = decrement(s.yellows)
+    if (eventType === 'staff_red') {
+      s.reds = decrement(s.reds)
+      s.sentOff = s.reds > 0
+    }
+    return
+  }
+
+  if (eventType === 'shot') team.stats.shots = decrement(team.stats.shots)
+  if (eventType === 'goal') team.stats.goals = decrement(team.stats.goals)
+  if (eventType === 'own_goal' && opponent) opponent.stats.goals = decrement(opponent.stats.goals)
+  if (eventType === 'penalty_goal') {
+    team.stats.goals = decrement(team.stats.goals)
+    team.stats.shots = decrement(team.stats.shots)
+  }
+  if (eventType === 'penalty_miss') team.stats.shots = decrement(team.stats.shots)
+  if (eventType === 'yellow') team.stats.yellows = decrement(team.stats.yellows)
+  if (eventType === 'red') team.stats.reds = decrement(team.stats.reds)
+  if (eventType === 'double_yellow') {
+    team.stats.yellows = decrement(team.stats.yellows)
+    team.stats.reds = decrement(team.stats.reds)
+  }
+  if (eventType === 'assist') team.stats.assists = decrement(team.stats.assists)
+  if (!playerId) return
+
+  const ps = team.playerStats[playerId]
+  if (!ps) return
+  if (eventType === 'shot') ps.shots = decrement(ps.shots)
+  if (eventType === 'goal') ps.goals = decrement(ps.goals)
+  if (eventType === 'penalty_goal') {
+    ps.goals = decrement(ps.goals)
+    ps.shots = decrement(ps.shots)
+  }
+  if (eventType === 'penalty_miss') ps.shots = decrement(ps.shots)
+  if (eventType === 'yellow') ps.yellows = decrement(ps.yellows)
+  if (eventType === 'red') ps.reds = decrement(ps.reds)
+  if (eventType === 'double_yellow') {
+    ps.yellows = decrement(ps.yellows)
+    ps.reds = decrement(ps.reds)
+  }
+  if (eventType === 'assist') ps.assists = decrement(ps.assists)
+  if (eventType === 'red' || eventType === 'double_yellow') {
+    if (ps.reds <= 0) team.redCarded = team.redCarded.filter((id) => id !== playerId)
   }
 }
 
@@ -374,7 +436,7 @@ export const registerEvent = (
     if (!staffRole) return { ok: false as const, message: 'Debes indicar si la tarjeta es para DT o AT' }
     const staffName = team.technicalStaff?.[staffRole]?.name?.trim()
     if (!staffName) return { ok: false as const, message: staffRole === 'director' ? 'Este equipo no tiene DT registrado' : 'Este equipo no tiene AT registrado' }
-    applyStatByEvent(team, eventType, null, staffRole)
+    applyStatByEvent(store, team, eventType, null, staffRole)
     const e1 = getElapsedSeconds(matchId)
     store.events.unshift({ id: uuidv4(), timestamp: new Date().toISOString(), teamId, playerId: null, type: eventType, staffRole, minute: Math.floor(e1 / 60), elapsedSeconds: e1, clock: formatClock(e1) })
     return { ok: true as const }
@@ -395,7 +457,7 @@ export const registerEvent = (
     if (eventType !== 'substitution' && !team.starters.includes(playerId)) return { ok: false as const, message: 'Solo jugadores en cancha pueden registrar este evento' }
   }
 
-  applyStatByEvent(team, eventType, playerId)
+  applyStatByEvent(store, team, eventType, playerId)
   const e2 = getElapsedSeconds(matchId)
   store.events.unshift({
     id: uuidv4(), timestamp: new Date().toISOString(), teamId, playerId,
@@ -403,6 +465,21 @@ export const registerEvent = (
     type: eventType, minute: Math.floor(e2 / 60), elapsedSeconds: e2, clock: formatClock(e2),
   })
   return { ok: true as const }
+}
+
+export const undoLastEvent = (matchId: string) => {
+  const store = getStore(matchId)
+  if (!store) return { ok: false as const, message: 'Partido no encontrado en memoria' }
+  if (store.events.length === 0) return { ok: false as const, message: 'No hay eventos para anular' }
+
+  const lastEvent = store.events.shift()
+  if (!lastEvent) return { ok: false as const, message: 'No hay eventos para anular' }
+
+  const team = findTeam(store, lastEvent.teamId)
+  if (!team) return { ok: false as const, message: 'Equipo del evento no encontrado' }
+
+  reverseStatByEvent(store, team, lastEvent.type, lastEvent.playerId, lastEvent.staffRole)
+  return { ok: true as const, event: lastEvent }
 }
 
 export const updateSettings = (matchId: string, payload: Partial<MatchSettings>) => {
