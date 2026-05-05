@@ -32,7 +32,7 @@ import {
   syncTeamInAllMatches,
   updateLineupWithFormation,
   registerEvent,
-  undoLastEvent,
+  removeEventById,
   buildLiveSnapshot,
   buildAllLiveSnapshots,
   loadMatchForLive,
@@ -3399,21 +3399,22 @@ app.post('/api/admin/live/events', (request, response) => {
   response.json({ data: buildLiveSnapshot(matchId) })
 })
 
-const undoLiveEventSchema = z.object({
+const deleteLiveEventSchema = z.object({
   matchId: z.string().min(1),
+  eventId: z.string().min(1),
 })
 
-app.post('/api/admin/live/events/undo', (request, response) => {
+app.post('/api/admin/live/events/delete', (request, response) => {
   const user = requireAuth(request, response)
   if (!user) return
 
-  const parsed = undoLiveEventSchema.safeParse(request.body)
+  const parsed = deleteLiveEventSchema.safeParse(request.body)
   if (!parsed.success) {
     response.status(400).json({ message: 'Payload inválido' })
     return
   }
 
-  const result = undoLastEvent(parsed.data.matchId)
+  const result = removeEventById(parsed.data.matchId, parsed.data.eventId)
   if (!result.ok) {
     response.status(400).json({ message: result.message })
     return

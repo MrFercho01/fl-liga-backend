@@ -415,6 +415,33 @@ const reverseStatByEvent = (store: LiveMatch, team: TeamLive, eventType: LiveEve
   }
 }
 
+const resetTeamStatsAndDiscipline = (team: TeamLive) => {
+  team.stats = emptyStats()
+  team.redCarded = []
+  const nextPlayerStats: Record<string, PlayerStats> = {}
+  team.players.forEach((p) => {
+    nextPlayerStats[p.id] = emptyPlayerStats()
+  })
+  team.playerStats = nextPlayerStats
+  team.staffDiscipline = {
+    director: emptyStaffDiscipline(team.technicalStaff?.director?.name),
+    assistant: emptyStaffDiscipline(team.technicalStaff?.assistant?.name),
+  }
+}
+
+const rebuildMatchStatsFromEvents = (store: LiveMatch) => {
+  resetTeamStatsAndDiscipline(store.homeTeam)
+  resetTeamStatsAndDiscipline(store.awayTeam)
+
+  // Events are stored newest first; replay oldest -> newest for deterministic rebuild.
+  const chronological = [...store.events].reverse()
+  chronological.forEach((event) => {
+    const team = findTeam(store, event.teamId)
+    if (!team) return
+    applyStatByEvent(store, team, event.type, event.playerId, event.staffRole)
+  })
+}
+
 export const registerEvent = (
   matchId: string,
   teamId: string,
@@ -470,6 +497,7 @@ export const registerEvent = (
 export const undoLastEvent = (matchId: string) => {
   const store = getStore(matchId)
   if (!store) return { ok: false as const, message: 'Partido no encontrado en memoria' }
+  if (store.status === 'finished') return { ok: false as const, message: 'Partido finalizado: no se pueden anular eventos' }
   if (store.events.length === 0) return { ok: false as const, message: 'No hay eventos para anular' }
 
   const lastEvent = store.events.shift()
@@ -480,6 +508,19 @@ export const undoLastEvent = (matchId: string) => {
 
   reverseStatByEvent(store, team, lastEvent.type, lastEvent.playerId, lastEvent.staffRole)
   return { ok: true as const, event: lastEvent }
+}
+
+export const removeEventById = (matchId: string, eventId: string) => {
+  const store = getStore(matchId)
+  if (!store) return { ok: false as const, message: 'Partido no encontrado en memoria' }
+  if (store.status === 'finished') return { ok: false as const, message: 'Partido finalizado: no se pueden eliminar eventos' }
+
+  const targetIndex = store.events.findIndex((event) => event.id === eventId)
+  if (targetIndex === -1) return { ok: false as const, message: 'Evento no encontrado' }
+
+  const [removed] = store.events.splice(targetIndex, 1)
+  rebuildMatchStatsFromEvents(store)
+  return { ok: true as const, event: removed }
 }
 
 export const updateSettings = (matchId: string, payload: Partial<MatchSettings>) => {
