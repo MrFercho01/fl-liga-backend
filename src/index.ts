@@ -19,7 +19,8 @@ import {
   savePlayedMatchToMongo,
   saveHighlightVideoToMongo,
   getVideosBucket,
-  getMongoObjectId
+  getMongoObjectId,
+  getPlayedMatchesCollection
 } from './data';
 import { randomBytes } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
@@ -3088,6 +3089,7 @@ app.get('/api/public/videos/:videoId', async (request, response) => {
 })
 
 const loadLiveMatchSchema = z.object({
+  matchId: z.string().uuid(),
   leagueId: z.string().uuid(),
   categoryId: z.string().uuid(),
   homeTeamId: z.string().uuid(),
@@ -3134,6 +3136,7 @@ app.post('/api/admin/live/load-match', async (request, response) => {
   const awayRegisteredPlayers = awayTeam.players.filter((player) => player.registrationStatus === 'registered')
   const homeTeamForLive = { ...homeTeam, players: homeRegisteredPlayers }
   const awayTeamForLive = { ...awayTeam, players: awayRegisteredPlayers }
+
   loadMatchForLive({
     leagueName: league.name,
     categoryName: category.name,
@@ -3143,8 +3146,32 @@ app.post('/api/admin/live/load-match', async (request, response) => {
     matchMinutes: category.rules.matchMinutes,
     breakMinutes: category.rules.breakMinutes,
   })
-  broadcastLive()
 
+  // Asignar el matchId del fixture al liveMatchStore
+  const { liveMatchStore } = require('./live')
+  liveMatchStore.id = parsed.data.matchId
+
+  // Cargar alineaciones guardadas en MongoDB si existen
+  try {
+    const playedMatchesCollection = await getPlayedMatchesCollection()
+    const saved = await playedMatchesCollection.findOne({ matchId: parsed.data.matchId })
+    if (saved?.homeLineup?.starters?.length) {
+      const homeIds = new Set(liveMatchStore.homeTeam.players.map((p: { id: string }) => p.id))
+      liveMatchStore.homeTeam.starters = (saved.homeLineup.starters as string[]).filter((id: string) => homeIds.has(id))
+      liveMatchStore.homeTeam.substitutes = (saved.homeLineup.substitutes as string[] || []).filter((id: string) => homeIds.has(id))
+      if (saved.homeLineup.formationKey) liveMatchStore.homeTeam.formationKey = saved.homeLineup.formationKey
+    }
+    if (saved?.awayLineup?.starters?.length) {
+      const awayIds = new Set(liveMatchStore.awayTeam.players.map((p: { id: string }) => p.id))
+      liveMatchStore.awayTeam.starters = (saved.awayLineup.starters as string[]).filter((id: string) => awayIds.has(id))
+      liveMatchStore.awayTeam.substitutes = (saved.awayLineup.substitutes as string[] || []).filter((id: string) => awayIds.has(id))
+      if (saved.awayLineup.formationKey) liveMatchStore.awayTeam.formationKey = saved.awayLineup.formationKey
+    }
+  } catch (err) {
+    console.error('Error cargando alineación guardada:', err)
+  }
+
+  broadcastLive()
   response.json({ data: buildLiveSnapshot() })
 }
 )

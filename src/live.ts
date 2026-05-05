@@ -1,31 +1,15 @@
-import { httpServer } from './server-stub';
-import { Server } from 'socket.io';
-let io: Server | null = null;
+import { emitLiveUpdate as _emitIO } from './io';
 
-/** Inicializa socket.io si no está inicializado */
-function getIO(): Server {
-  if (!io) {
-    io = new Server(httpServer, { cors: { origin: '*' } });
-  }
-  return io;
-}
-
-/**
- * Emite un evento de actualización en vivo a todos los clientes conectados.
- * @param event Nombre del evento
- * @param data  Datos a enviar
- */
 export function emitLiveUpdate(event: string, data: any) {
-  getIO().emit(event, data);
+  _emitIO(event, data);
 }
 
 /**
- * Broadcast general para notificar cambios en el partido en vivo.
- * Puede usarse para eventos globales.
+ * Emite el snapshot actual del partido a todos los clientes (live:update).
+ * Se llama DESPUÉS de cualquier cambio en liveMatchStore.
+ * broadcastLive está definida al final del archivo donde buildLiveSnapshot ya existe.
  */
-export function broadcastLive() {
-  getIO().emit('live:broadcast', { timestamp: Date.now() });
-}
+export let broadcastLive: () => void = () => {};
 import { v4 as uuidv4 } from 'uuid'
 import type { RegisteredTeam } from './data'
 
@@ -661,3 +645,8 @@ export const buildLiveSnapshot = () => ({
   },
   currentMinute: getCurrentMinute(),
 })
+
+// Ahora que buildLiveSnapshot está definido, inicializamos broadcastLive con su implementación real.
+broadcastLive = () => {
+  _emitIO('live:update', buildLiveSnapshot());
+};
