@@ -6,7 +6,7 @@ import { saveUserToMongo } from './saveUserToMongo';
 import type { AppUser } from './data';
 import 'dotenv/config';
 import { resolvePlayersOnField } from './utils';
-import { broadcastLive, emitLiveUpdate } from './live';
+import { broadcastLive } from './live';
 import { z } from 'zod';
 import cors from 'cors';
 import express from 'express';
@@ -29,11 +29,15 @@ import { Readable } from 'stream';
 import multer from 'multer';
 import { generateFixture } from './fixture';
 import {
-  syncLiveTeamFromRegistered,
+  syncTeamInAllMatches,
   updateLineupWithFormation,
   registerEvent,
   buildLiveSnapshot,
-  loadMatchForLive
+  buildAllLiveSnapshots,
+  loadMatchForLive,
+  liveStores,
+  setTimerAction,
+  setMatchStatusAction,
 } from './live';
 import { setupSocketIO } from './io';
 import { requireAuth } from './requireAuth';
@@ -2325,10 +2329,8 @@ app.patch('/api/admin/teams/:teamId/players/:playerId', async (request, response
     ...team,
     players: team.players.filter((item) => item.registrationStatus === 'registered'),
   }
-  const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
-  if (syncedLive) {
-    broadcastLive()
-  }
+  const updatedMatchIds = syncTeamInAllMatches(registeredTeamSnapshot, playersOnField)
+  for (const matchId of updatedMatchIds) { broadcastLive(matchId) }
   response.json({ data: team })
 })
 
@@ -2373,10 +2375,8 @@ app.delete('/api/admin/teams/:teamId/players/:playerId', async (request, respons
     ...team,
     players: team.players.filter((item) => item.registrationStatus === 'registered'),
   }
-  const syncedLive = syncLiveTeamFromRegistered(registeredTeamSnapshot, playersOnField)
-  if (syncedLive) {
-    broadcastLive()
-  }
+  const updatedMatchIds2 = syncTeamInAllMatches(registeredTeamSnapshot, playersOnField)
+  for (const matchId of updatedMatchIds2) { broadcastLive(matchId) }
   response.json({ data: team })
 })
 
@@ -3137,7 +3137,7 @@ app.post('/api/admin/live/load-match', async (request, response) => {
   const homeTeamForLive = { ...homeTeam, players: homeRegisteredPlayers }
   const awayTeamForLive = { ...awayTeam, players: awayRegisteredPlayers }
 
-  loadMatchForLive({
+  loadMatchForLive(parsed.data.matchId, {
     leagueName: league.name,
     categoryName: category.name,
     homeTeam: homeTeamForLive,
@@ -3147,21 +3147,18 @@ app.post('/api/admin/live/load-match', async (request, response) => {
     breakMinutes: category.rules.breakMinutes,
   })
 
-  // Asignar el matchId del fixture al liveMatchStore
-  const { liveMatchStore } = require('./live')
-  liveMatchStore.id = parsed.data.matchId
-
   // Cargar alineaciones guardadas en MongoDB si existen
+  const liveMatchStore = liveStores.get(parsed.data.matchId)
   try {
     const playedMatchesCollection = await getPlayedMatchesCollection()
     const saved = await playedMatchesCollection.findOne({ matchId: parsed.data.matchId })
-    if (saved?.homeLineup?.starters?.length) {
+    if (saved?.homeLineup?.starters?.length && liveMatchStore) {
       const homeIds = new Set(liveMatchStore.homeTeam.players.map((p: { id: string }) => p.id))
       liveMatchStore.homeTeam.starters = (saved.homeLineup.starters as string[]).filter((id: string) => homeIds.has(id))
       liveMatchStore.homeTeam.substitutes = (saved.homeLineup.substitutes as string[] || []).filter((id: string) => homeIds.has(id))
       if (saved.homeLineup.formationKey) liveMatchStore.homeTeam.formationKey = saved.homeLineup.formationKey
     }
-    if (saved?.awayLineup?.starters?.length) {
+    if (saved?.awayLineup?.starters?.length && liveMatchStore) {
       const awayIds = new Set(liveMatchStore.awayTeam.players.map((p: { id: string }) => p.id))
       liveMatchStore.awayTeam.starters = (saved.awayLineup.starters as string[]).filter((id: string) => awayIds.has(id))
       liveMatchStore.awayTeam.substitutes = (saved.awayLineup.substitutes as string[] || []).filter((id: string) => awayIds.has(id))
@@ -3171,8 +3168,8 @@ app.post('/api/admin/live/load-match', async (request, response) => {
     console.error('Error cargando alineación guardada:', err)
   }
 
-  broadcastLive()
-  response.json({ data: buildLiveSnapshot() })
+  broadcastLive(parsed.data.matchId)
+  response.json({ data: buildLiveSnapshot(parsed.data.matchId) })
 }
 )
 
@@ -3297,6 +3294,7 @@ app.delete('/api/admin/leagues/:leagueId', async (request, response) => {
 })
 
 const timerActionSchema = z.object({
+  matchId: z.string().uuid(),
   action: z.enum(['start', 'stop', 'reset', 'finish']),
 })
 
@@ -3309,10 +3307,20 @@ app.post('/api/admin/live/timer', (request, response) => {
     response.status(400).json({ message: 'Payload inválido' })
     return
   }
-});
+
+  const { matchId, action } = parsed.data
+  if (action === 'finish') {
+    setMatchStatusAction(matchId, 'finish')
+  } else {
+    setTimerAction(matchId, action)
+  }
+  broadcastLive(matchId)
+  response.json({ data: buildLiveSnapshot(matchId) })
+})
 
 // --- Lineup schema (corregido fuera del PATCH) ---
 const lineupSchema = z.object({
+  matchId: z.string().uuid(),
   teamId: z.string().uuid(),
   starters: z.array(z.string().uuid()),
   substitutes: z.array(z.string().uuid()),
@@ -3330,7 +3338,9 @@ app.post('/api/admin/live/lineup', async (request, response) => {
       return
     }
 
+    const { matchId } = parsed.data
     const result = updateLineupWithFormation(
+      matchId,
       parsed.data.teamId,
       parsed.data.starters,
       parsed.data.substitutes,
@@ -3341,17 +3351,18 @@ app.post('/api/admin/live/lineup', async (request, response) => {
       return
     }
 
-    const { liveMatchStore } = require('./live')
-    await saveLiveMatchToMongo(liveMatchStore)
+    const store = liveStores.get(matchId)
+    if (store) await saveLiveMatchToMongo(store)
 
-    broadcastLive()
-    response.json({ data: buildLiveSnapshot() })
+    broadcastLive(matchId)
+    response.json({ data: buildLiveSnapshot(matchId) })
   } catch (error) {
     response.status(500).json({ message: 'Error al guardar alineación', error: String(error) })
   }
 })
 
 const liveEventSchema = z.object({
+  matchId: z.string().uuid(),
   teamId: z.string().uuid(),
   playerId: z.string().uuid().nullable(),
   substitutionInPlayerId: z.string().uuid().optional(),
@@ -3381,7 +3392,9 @@ app.post('/api/admin/live/events', (request, response) => {
     return
   }
 
+  const { matchId } = parsed.data
   const result = registerEvent(
+    matchId,
     parsed.data.teamId,
     parsed.data.type,
     parsed.data.playerId,
@@ -3395,9 +3408,13 @@ app.post('/api/admin/live/events', (request, response) => {
     return
   }
 
-  broadcastLive()
-  response.json({ data: buildLiveSnapshot() })
-});
+  broadcastLive(matchId)
+  response.json({ data: buildLiveSnapshot(matchId) })
+})
+
+app.get('/api/live', (_request, response) => {
+  response.json({ data: buildAllLiveSnapshots() })
+})
 
 // En producción, los eventos live:update se emiten por socket.io
 // En desarrollo, se mantiene el stub/broadcastLive local

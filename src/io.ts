@@ -16,13 +16,23 @@ export function setupSocketIO(server: http.Server) {
       credentials: true
     }
   });
-  io.on('connection', (_socket) => {
-    // Socket conectado — los eventos live se emiten con emitLiveUpdate
+  io.on('connection', (socket) => {
+    socket.on('join:match', (matchId: string) => {
+      if (typeof matchId === 'string' && matchId.length > 0) {
+        void socket.join(`match:${matchId}`)
+      }
+    })
   });
 }
 
 export function emitLiveUpdate(event: string, data: any) {
   if (io) {
     io.emit(event, data);
+  }
+}
+
+export function emitToRoom(room: string, event: string, data: any) {
+  if (io) {
+    io.to(room).emit(event, data);
   }
 }

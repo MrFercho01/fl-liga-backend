@@ -1,15 +1,4 @@
-import { emitLiveUpdate as _emitIO } from './io';
-
-export function emitLiveUpdate(event: string, data: any) {
-  _emitIO(event, data);
-}
-
-/**
- * Emite el snapshot actual del partido a todos los clientes (live:update).
- * Se llama DESPUÉS de cualquier cambio en liveMatchStore.
- * broadcastLive está definida al final del archivo donde buildLiveSnapshot ya existe.
- */
-export let broadcastLive: () => void = () => {};
+import { emitLiveUpdate, emitToRoom } from './io';
 import { v4 as uuidv4 } from 'uuid'
 import type { RegisteredTeam } from './data'
 
@@ -59,14 +48,8 @@ export interface TeamLive {
   id: string
   name: string
   technicalStaff?: {
-    director?: {
-      name: string
-      photoUrl?: string
-    }
-    assistant?: {
-      name: string
-      photoUrl?: string
-    }
+    director?: { name: string; photoUrl?: string }
+    assistant?: { name: string; photoUrl?: string }
   }
   players: Player[]
   starters: string[]
@@ -74,18 +57,8 @@ export interface TeamLive {
   formationKey?: string
   redCarded: string[]
   staffDiscipline: {
-    director: {
-      name?: string
-      yellows: number
-      reds: number
-      sentOff: boolean
-    }
-    assistant: {
-      name?: string
-      yellows: number
-      reds: number
-      sentOff: boolean
-    }
+    director: { name?: string; yellows: number; reds: number; sentOff: boolean }
+    assistant: { name?: string; yellows: number; reds: number; sentOff: boolean }
   }
   stats: TeamStats
   playerStats: Record<string, PlayerStats>
@@ -130,87 +103,30 @@ export interface LiveMatch {
   events: MatchEvent[]
 }
 
-const positions = ['POR', 'DEF', 'MED', 'DEL']
+/** All in-memory live match stores, keyed by matchId */
+export const liveStores = new Map<string, LiveMatch>()
 
-const createPlayers = (prefix: string): Player[] => {
-  return Array.from({ length: 18 }, (_, index) => ({
-    id: uuidv4(),
-    name: `${prefix} Jugador ${index + 1}`,
-    nickname: `Apodo ${index + 1}`,
-    number: index + 1,
-    position: positions[index % positions.length] ?? 'MED',
-    age: 18 + (index % 16),
-  }))
-}
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
 
-const emptyStats = (): TeamStats => ({
-  shots: 0,
-  goals: 0,
-  yellows: 0,
-  reds: 0,
-  assists: 0,
-})
-
-const emptyPlayerStats = (): PlayerStats => ({
-  shots: 0,
-  goals: 0,
-  yellows: 0,
-  reds: 0,
-  assists: 0,
-})
-
-const emptyStaffDiscipline = (name?: string) => ({
-  ...(name ? { name } : {}),
-  yellows: 0,
-  reds: 0,
-  sentOff: false,
-})
-
-const createTeam = (name: string): TeamLive => {
-  const players = createPlayers(name)
-  const starters = players.slice(0, 11).map((player) => player.id)
-  const substitutes = players.slice(11).map((player) => player.id)
-  const playerStats: Record<string, PlayerStats> = {}
-  players.forEach((player) => {
-    playerStats[player.id] = emptyPlayerStats()
-  })
-
-  return {
-    id: uuidv4(),
-    name,
-    players,
-    starters,
-    substitutes,
-    redCarded: [],
-    staffDiscipline: {
-      director: emptyStaffDiscipline(),
-      assistant: emptyStaffDiscipline(),
-    },
-    stats: emptyStats(),
-    playerStats,
-  }
-}
+const emptyStats = (): TeamStats => ({ shots: 0, goals: 0, yellows: 0, reds: 0, assists: 0 })
+const emptyPlayerStats = (): PlayerStats => ({ shots: 0, goals: 0, yellows: 0, reds: 0, assists: 0 })
+const emptyStaffDiscipline = (name?: string) => ({ ...(name ? { name } : {}), yellows: 0, reds: 0, sentOff: false })
 
 const createTeamFromRegistered = (team: RegisteredTeam, playersOnField: number): TeamLive => {
-  const players = team.players.map((player) => ({
-    id: player.id,
-    name: player.name,
-    nickname: player.nickname,
-    number: player.number,
-    position: player.position,
-    age: player.age,
-    ...(player.photoUrl ? { photoUrl: player.photoUrl } : {}),
-    ...(player.registrationStatus ? { registrationStatus: player.registrationStatus } : {}),
+  const players = team.players.map((p) => ({
+    id: p.id,
+    name: p.name,
+    nickname: p.nickname,
+    number: p.number,
+    position: p.position,
+    age: p.age,
+    ...(p.photoUrl ? { photoUrl: p.photoUrl } : {}),
+    ...(p.registrationStatus ? { registrationStatus: p.registrationStatus } : {}),
   }))
-
-  const starters = players.slice(0, playersOnField).map((player) => player.id)
-  const substitutes = players.slice(playersOnField).map((player) => player.id)
+  const starters = players.slice(0, playersOnField).map((p) => p.id)
+  const substitutes = players.slice(playersOnField).map((p) => p.id)
   const playerStats: Record<string, PlayerStats> = {}
-
-  players.forEach((player) => {
-    playerStats[player.id] = emptyPlayerStats()
-  })
-
+  players.forEach((p) => { playerStats[p.id] = emptyPlayerStats() })
   return {
     id: team.id,
     name: team.name,
@@ -228,61 +144,73 @@ const createTeamFromRegistered = (team: RegisteredTeam, playersOnField: number):
   }
 }
 
-export const syncLiveTeamFromRegistered = (team: RegisteredTeam, playersOnField: number) => {
-  const liveTeam =
-    liveMatchStore.homeTeam.id === team.id
-      ? liveMatchStore.homeTeam
-      : liveMatchStore.awayTeam.id === team.id
-        ? liveMatchStore.awayTeam
-        : null
+const formatClock = (seconds: number) => {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
 
+// ─── Per-match operations ──────────────────────────────────────────────────────
+
+const getStore = (matchId: string): LiveMatch | null => liveStores.get(matchId) ?? null
+
+export const getElapsedSeconds = (matchId: string): number => {
+  const store = getStore(matchId)
+  if (!store) return 0
+  if (!store.timer.running || !store.timer.startedAt) return store.timer.elapsedSeconds
+  return store.timer.elapsedSeconds + Math.max(Math.floor((Date.now() - store.timer.startedAt) / 1000), 0)
+}
+
+export const getCurrentMinute = (matchId: string): number => Math.floor(getElapsedSeconds(matchId) / 60)
+
+const findTeam = (store: LiveMatch, teamId: string): TeamLive | null => {
+  if (store.homeTeam.id === teamId) return store.homeTeam
+  if (store.awayTeam.id === teamId) return store.awayTeam
+  return null
+}
+
+export const syncLiveTeamFromRegistered = (matchId: string, team: RegisteredTeam, playersOnField: number): boolean => {
+  const store = getStore(matchId)
+  if (!store) return false
+  const liveTeam = findTeam(store, team.id)
   if (!liveTeam) return false
 
-  const players = team.players.map((player) => ({
-    id: player.id,
-    name: player.name,
-    nickname: player.nickname,
-    number: player.number,
-    position: player.position,
-    age: player.age,
-    ...(player.photoUrl ? { photoUrl: player.photoUrl } : {}),
-    ...(player.registrationStatus ? { registrationStatus: player.registrationStatus } : {}),
+  const players = team.players.map((p) => ({
+    id: p.id,
+    name: p.name,
+    nickname: p.nickname,
+    number: p.number,
+    position: p.position,
+    age: p.age,
+    ...(p.photoUrl ? { photoUrl: p.photoUrl } : {}),
+    ...(p.registrationStatus ? { registrationStatus: p.registrationStatus } : {}),
   }))
 
-  const availableIds = new Set(players.map((player) => player.id))
+  const availableIds = new Set(players.map((p) => p.id))
   liveTeam.players = players
-  liveTeam.redCarded = liveTeam.redCarded.filter((playerId) => availableIds.has(playerId))
+  liveTeam.redCarded = liveTeam.redCarded.filter((id) => availableIds.has(id))
 
   const redCardedIds = new Set(liveTeam.redCarded)
-  const preservedStarters = liveTeam.starters.filter((playerId) => availableIds.has(playerId) && !redCardedIds.has(playerId))
+  const preservedStarters = liveTeam.starters.filter((id) => availableIds.has(id) && !redCardedIds.has(id))
   const startersSet = new Set(preservedStarters)
 
-  for (const player of players) {
+  for (const p of players) {
     if (preservedStarters.length >= playersOnField) break
-    if (!startersSet.has(player.id) && !redCardedIds.has(player.id)) {
-      preservedStarters.push(player.id)
-      startersSet.add(player.id)
+    if (!startersSet.has(p.id) && !redCardedIds.has(p.id)) {
+      preservedStarters.push(p.id)
+      startersSet.add(p.id)
     }
   }
 
-  const substitutes = players
-    .map((player) => player.id)
-    .filter((playerId) => !startersSet.has(playerId) && !redCardedIds.has(playerId))
-
   liveTeam.starters = preservedStarters.slice(0, Math.max(0, playersOnField))
-  liveTeam.substitutes = substitutes
+  liveTeam.substitutes = players.map((p) => p.id).filter((id) => !startersSet.has(id) && !redCardedIds.has(id))
 
   const nextPlayerStats: Record<string, PlayerStats> = {}
-  players.forEach((player) => {
-    nextPlayerStats[player.id] = liveTeam.playerStats[player.id] ?? emptyPlayerStats()
-  })
+  players.forEach((p) => { nextPlayerStats[p.id] = liveTeam.playerStats[p.id] ?? emptyPlayerStats() })
   liveTeam.playerStats = nextPlayerStats
 
-  if (team.technicalStaff) {
-    liveTeam.technicalStaff = team.technicalStaff
-  } else {
-    delete liveTeam.technicalStaff
-  }
+  if (team.technicalStaff) liveTeam.technicalStaff = team.technicalStaff
+  else delete liveTeam.technicalStaff
 
   liveTeam.staffDiscipline = {
     director: {
@@ -294,116 +222,79 @@ export const syncLiveTeamFromRegistered = (team: RegisteredTeam, playersOnField:
       ...(team.technicalStaff?.assistant?.name ? { name: team.technicalStaff.assistant.name } : {}),
     },
   }
-
   return true
 }
 
-export const liveMatchStore: LiveMatch = {
-  id: uuidv4(),
-  leagueName: 'Liga Amateur Quito Norte',
-  categoryName: 'Libre',
-  status: 'scheduled',
-  homeTeam: createTeam('FL Cóndores'),
-  awayTeam: createTeam('FL Titanes'),
-  settings: {
-    playersOnField: 11,
-    matchMinutes: 90,
-    breakMinutes: 15,
-    homeHasBye: false,
-    awayHasBye: false,
-  },
-  timer: {
-    running: false,
-    startedAt: null,
-    elapsedSeconds: 0,
-  },
-  events: [],
-}
-
-export const getElapsedSeconds = () => {
-  if (!liveMatchStore.timer.running || !liveMatchStore.timer.startedAt) {
-    return liveMatchStore.timer.elapsedSeconds
+/** Syncs a team across ALL active live match stores. Returns updated matchIds. */
+export const syncTeamInAllMatches = (team: RegisteredTeam, playersOnField: number): string[] => {
+  const updated: string[] = []
+  for (const matchId of liveStores.keys()) {
+    if (syncLiveTeamFromRegistered(matchId, team, playersOnField)) updated.push(matchId)
   }
-
-  const delta = Math.floor((Date.now() - liveMatchStore.timer.startedAt) / 1000)
-  return liveMatchStore.timer.elapsedSeconds + Math.max(delta, 0)
+  return updated
 }
 
-export const getCurrentMinute = () => Math.floor(getElapsedSeconds() / 60)
-
-const formatClock = (seconds: number) => {
-  const minutes = Math.floor(seconds / 60)
-  const left = seconds % 60
-  return `${String(minutes).padStart(2, '0')}:${String(left).padStart(2, '0')}`
-}
-
-const findTeam = (teamId: string) => {
-  if (liveMatchStore.homeTeam.id === teamId) return liveMatchStore.homeTeam
-  if (liveMatchStore.awayTeam.id === teamId) return liveMatchStore.awayTeam
-  return null
-}
-
-export const updateLineup = (teamId: string, starters: string[], substitutes: string[]) => {
-  const team = findTeam(teamId)
+export const updateLineup = (matchId: string, teamId: string, starters: string[], substitutes: string[]) => {
+  const store = getStore(matchId)
+  if (!store) return { ok: false as const, message: 'Partido no encontrado en memoria' }
+  const team = findTeam(store, teamId)
   if (!team) return { ok: false as const, message: 'Equipo no encontrado' }
 
-  const availableIds = new Set(team.players.map((player) => player.id))
+  const availableIds = new Set(team.players.map((p) => p.id))
   const validStarters = starters.filter((id) => availableIds.has(id) && !team.redCarded.includes(id))
   const validSubstitutes = substitutes.filter((id) => availableIds.has(id) && !validStarters.includes(id))
 
-  if (validStarters.length > liveMatchStore.settings.playersOnField) {
-    return { ok: false as const, message: 'Titulares exceden el máximo permitido por regla' }
+  if (validStarters.length > store.settings.playersOnField) {
+    return { ok: false as const, message: 'Titulares exceden el maximo permitido por regla' }
   }
 
   team.starters = validStarters
   team.substitutes = validSubstitutes
-
   return { ok: true as const }
 }
 
 export const updateLineupWithFormation = (
+  matchId: string,
   teamId: string,
   starters: string[],
   substitutes: string[],
   formationKey?: string,
 ) => {
-  const result = updateLineup(teamId, starters, substitutes)
+  const result = updateLineup(matchId, teamId, starters, substitutes)
   if (!result.ok) return result
-
-  const team = findTeam(teamId)
-  if (!team) return { ok: false as const, message: 'Equipo no encontrado' }
-
-  if (formationKey && formationKey.trim()) {
-    team.formationKey = formationKey.trim()
-  }
-
+  const store = getStore(matchId)!
+  const team = findTeam(store, teamId)!
+  if (formationKey?.trim()) team.formationKey = formationKey.trim()
   return { ok: true as const }
 }
 
-export const setTimerAction = (action: 'start' | 'stop' | 'reset') => {
-  if (action === 'start' && !liveMatchStore.timer.running) {
-    liveMatchStore.timer.running = true
-    liveMatchStore.timer.startedAt = Date.now()
-    liveMatchStore.status = 'live'
+export const setTimerAction = (matchId: string, action: 'start' | 'stop' | 'reset') => {
+  const store = getStore(matchId)
+  if (!store) return
+
+  if (action === 'start' && !store.timer.running) {
+    store.timer.running = true
+    store.timer.startedAt = Date.now()
+    store.status = 'live'
     return
   }
 
-  if (action === 'stop' && liveMatchStore.timer.running) {
-    liveMatchStore.timer.elapsedSeconds = getElapsedSeconds()
-    liveMatchStore.timer.running = false
-    liveMatchStore.timer.startedAt = null
+  if (action === 'stop' && store.timer.running) {
+    store.timer.elapsedSeconds = getElapsedSeconds(matchId)
+    store.timer.running = false
+    store.timer.startedAt = null
     return
   }
 
   if (action === 'reset') {
-    const resetTeamForRestart = (team: TeamLive) => {
+    const resetTeam = (team: TeamLive) => {
       team.stats = emptyStats()
       team.redCarded = []
       delete team.formationKey
       team.starters = []
-      team.substitutes = team.players.map((player) => player.id)
-      team.playerStats = team.players.reduce<Record<string, PlayerStats>>((acc, player) => {
-        acc[player.id] = emptyPlayerStats()
+      team.substitutes = team.players.map((p) => p.id)
+      team.playerStats = team.players.reduce<Record<string, PlayerStats>>((acc, p) => {
+        acc[p.id] = emptyPlayerStats()
         return acc
       }, {})
       team.staffDiscipline = {
@@ -411,242 +302,176 @@ export const setTimerAction = (action: 'start' | 'stop' | 'reset') => {
         assistant: emptyStaffDiscipline(team.technicalStaff?.assistant?.name),
       }
     }
-
-    liveMatchStore.timer.running = false
-    liveMatchStore.timer.startedAt = null
-    liveMatchStore.timer.elapsedSeconds = 0
-    liveMatchStore.status = 'scheduled'
-    liveMatchStore.events = []
-    resetTeamForRestart(liveMatchStore.homeTeam)
-    resetTeamForRestart(liveMatchStore.awayTeam)
+    store.timer = { running: false, startedAt: null, elapsedSeconds: 0 }
+    store.status = 'scheduled'
+    store.events = []
+    resetTeam(store.homeTeam)
+    resetTeam(store.awayTeam)
   }
 }
 
-export const setMatchStatusAction = (action: 'finish') => {
+export const setMatchStatusAction = (matchId: string, action: 'finish') => {
+  const store = getStore(matchId)
+  if (!store) return
   if (action === 'finish') {
-    liveMatchStore.timer.elapsedSeconds = getElapsedSeconds()
-    liveMatchStore.timer.running = false
-    liveMatchStore.timer.startedAt = null
-    liveMatchStore.status = 'finished'
+    store.timer.elapsedSeconds = getElapsedSeconds(matchId)
+    store.timer.running = false
+    store.timer.startedAt = null
+    store.status = 'finished'
   }
 }
 
 const applyStatByEvent = (team: TeamLive, eventType: LiveEventType, playerId: string | null, staffRole?: LiveStaffRole) => {
   if (eventType === 'staff_yellow' || eventType === 'staff_red') {
     if (!staffRole) return
-
-    const staffStats = team.staffDiscipline[staffRole]
-    if (eventType === 'staff_yellow') {
-      staffStats.yellows += 1
-    }
-    if (eventType === 'staff_red') {
-      staffStats.reds += 1
-      staffStats.sentOff = true
-    }
+    const s = team.staffDiscipline[staffRole]
+    if (eventType === 'staff_yellow') s.yellows += 1
+    if (eventType === 'staff_red') { s.reds += 1; s.sentOff = true }
     return
   }
-
   if (eventType === 'shot') team.stats.shots += 1
   if (eventType === 'goal') team.stats.goals += 1
-  if (eventType === 'penalty_goal') {
-    team.stats.goals += 1
-    team.stats.shots += 1
-  }
+  if (eventType === 'penalty_goal') { team.stats.goals += 1; team.stats.shots += 1 }
   if (eventType === 'penalty_miss') team.stats.shots += 1
   if (eventType === 'yellow') team.stats.yellows += 1
   if (eventType === 'red') team.stats.reds += 1
-  if (eventType === 'double_yellow') {
-    team.stats.yellows += 1
-    team.stats.reds += 1
-  }
+  if (eventType === 'double_yellow') { team.stats.yellows += 1; team.stats.reds += 1 }
   if (eventType === 'assist') team.stats.assists += 1
-
   if (!playerId) return
-  const stats = team.playerStats[playerId]
-  if (!stats) return
-
-  if (eventType === 'shot') stats.shots += 1
-  if (eventType === 'goal') stats.goals += 1
-  if (eventType === 'penalty_goal') {
-    stats.goals += 1
-    stats.shots += 1
-  }
-  if (eventType === 'penalty_miss') stats.shots += 1
-  if (eventType === 'yellow') stats.yellows += 1
-  if (eventType === 'red') stats.reds += 1
-  if (eventType === 'double_yellow') {
-    stats.yellows += 1
-    stats.reds += 1
-  }
-  if (eventType === 'assist') stats.assists += 1
-
+  const ps = team.playerStats[playerId]
+  if (!ps) return
+  if (eventType === 'shot') ps.shots += 1
+  if (eventType === 'goal') ps.goals += 1
+  if (eventType === 'penalty_goal') { ps.goals += 1; ps.shots += 1 }
+  if (eventType === 'penalty_miss') ps.shots += 1
+  if (eventType === 'yellow') ps.yellows += 1
+  if (eventType === 'red') ps.reds += 1
+  if (eventType === 'double_yellow') { ps.yellows += 1; ps.reds += 1 }
+  if (eventType === 'assist') ps.assists += 1
   if (eventType === 'red' || eventType === 'double_yellow') {
-    if (!team.redCarded.includes(playerId)) {
-      team.redCarded.push(playerId)
-    }
+    if (!team.redCarded.includes(playerId)) team.redCarded.push(playerId)
   }
 }
 
 export const registerEvent = (
+  matchId: string,
   teamId: string,
   eventType: LiveEventType,
   playerId: string | null,
   options?: { staffRole?: LiveStaffRole; substitutionInPlayerId?: string },
 ) => {
-  if (liveMatchStore.status === 'scheduled') {
-    return { ok: false as const, message: 'Debes iniciar el partido para registrar eventos' }
-  }
-
-  if (liveMatchStore.status === 'finished') {
-    return { ok: false as const, message: 'Partido finalizado: no se pueden registrar más eventos' }
-  }
-
-  const team = findTeam(teamId)
+  const store = getStore(matchId)
+  if (!store) return { ok: false as const, message: 'Partido no encontrado en memoria' }
+  if (store.status === 'scheduled') return { ok: false as const, message: 'Debes iniciar el partido para registrar eventos' }
+  if (store.status === 'finished') return { ok: false as const, message: 'Partido finalizado: no se pueden registrar mas eventos' }
+  const team = findTeam(store, teamId)
   if (!team) return { ok: false as const, message: 'Equipo no encontrado' }
 
   if (eventType === 'staff_yellow' || eventType === 'staff_red') {
-    if (playerId !== null) {
-      return { ok: false as const, message: 'Eventos de DT/AT no deben incluir jugadora' }
-    }
-
-    if (options?.substitutionInPlayerId) {
-      return { ok: false as const, message: 'Eventos de DT/AT no deben incluir jugadora de cambio' }
-    }
-
+    if (playerId !== null) return { ok: false as const, message: 'Eventos de DT/AT no deben incluir jugadora' }
+    if (options?.substitutionInPlayerId) return { ok: false as const, message: 'Eventos de DT/AT no deben incluir jugadora de cambio' }
     const staffRole = options?.staffRole
-    if (!staffRole) {
-      return { ok: false as const, message: 'Debes indicar si la tarjeta es para DT o AT' }
-    }
-
+    if (!staffRole) return { ok: false as const, message: 'Debes indicar si la tarjeta es para DT o AT' }
     const staffName = team.technicalStaff?.[staffRole]?.name?.trim()
-    if (!staffName) {
-      return {
-        ok: false as const,
-        message: staffRole === 'director' ? 'Este equipo no tiene DT registrado' : 'Este equipo no tiene AT registrado',
-      }
-    }
-
+    if (!staffName) return { ok: false as const, message: staffRole === 'director' ? 'Este equipo no tiene DT registrado' : 'Este equipo no tiene AT registrado' }
     applyStatByEvent(team, eventType, null, staffRole)
-
-    const elapsedSeconds = getElapsedSeconds()
-
-    liveMatchStore.events.unshift({
-      id: uuidv4(),
-      timestamp: new Date().toISOString(),
-      teamId,
-      playerId: null,
-      type: eventType,
-      staffRole,
-      minute: Math.floor(elapsedSeconds / 60),
-      elapsedSeconds,
-      clock: formatClock(elapsedSeconds),
-    })
-
+    const e1 = getElapsedSeconds(matchId)
+    store.events.unshift({ id: uuidv4(), timestamp: new Date().toISOString(), teamId, playerId: null, type: eventType, staffRole, minute: Math.floor(e1 / 60), elapsedSeconds: e1, clock: formatClock(e1) })
     return { ok: true as const }
   }
 
   if (eventType === 'substitution') {
-    if (!playerId) {
-      return { ok: false as const, message: 'Debes indicar la jugadora que sale' }
-    }
-
-    const incomingPlayerId = options?.substitutionInPlayerId
-    if (!incomingPlayerId) {
-      return { ok: false as const, message: 'Debes indicar la jugadora que entra' }
-    }
-
-    if (incomingPlayerId === playerId) {
-      return { ok: false as const, message: 'Las jugadoras del cambio deben ser distintas' }
-    }
-
-    const incomingExists = team.players.some((player) => player.id === incomingPlayerId)
-    if (!incomingExists) {
-      return { ok: false as const, message: 'Jugador que entra no inscrito en el equipo' }
-    }
-
-    if (team.redCarded.includes(incomingPlayerId)) {
-      return { ok: false as const, message: 'Jugador que entra expulsado: no puede reingresar' }
-    }
+    if (!playerId) return { ok: false as const, message: 'Debes indicar la jugadora que sale' }
+    const inId = options?.substitutionInPlayerId
+    if (!inId) return { ok: false as const, message: 'Debes indicar la jugadora que entra' }
+    if (inId === playerId) return { ok: false as const, message: 'Las jugadoras del cambio deben ser distintas' }
+    if (!team.players.some((p) => p.id === inId)) return { ok: false as const, message: 'Jugador que entra no inscrito en el equipo' }
+    if (team.redCarded.includes(inId)) return { ok: false as const, message: 'Jugador que entra expulsado: no puede reingresar' }
   }
 
   if (playerId) {
-    const exists = team.players.some((player) => player.id === playerId)
-    if (!exists) return { ok: false as const, message: 'Jugador no inscrito en el equipo' }
-    if (team.redCarded.includes(playerId)) {
-      return { ok: false as const, message: 'Jugador expulsado: no puede registrar más acciones' }
-    }
-    if (eventType !== 'substitution' && !team.starters.includes(playerId)) {
-      return { ok: false as const, message: 'Solo jugadores en cancha pueden registrar este evento' }
-    }
+    if (!team.players.some((p) => p.id === playerId)) return { ok: false as const, message: 'Jugador no inscrito en el equipo' }
+    if (team.redCarded.includes(playerId)) return { ok: false as const, message: 'Jugador expulsado: no puede registrar mas acciones' }
+    if (eventType !== 'substitution' && !team.starters.includes(playerId)) return { ok: false as const, message: 'Solo jugadores en cancha pueden registrar este evento' }
   }
 
   applyStatByEvent(team, eventType, playerId)
-
-  const elapsedSeconds = getElapsedSeconds()
-
-  liveMatchStore.events.unshift({
-    id: uuidv4(),
-    timestamp: new Date().toISOString(),
-    teamId,
-    playerId,
-    ...(eventType === 'substitution' && options?.substitutionInPlayerId
-      ? { substitutionInPlayerId: options.substitutionInPlayerId }
-      : {}),
-    type: eventType,
-    minute: Math.floor(elapsedSeconds / 60),
-    elapsedSeconds,
-    clock: formatClock(elapsedSeconds),
+  const e2 = getElapsedSeconds(matchId)
+  store.events.unshift({
+    id: uuidv4(), timestamp: new Date().toISOString(), teamId, playerId,
+    ...(eventType === 'substitution' && options?.substitutionInPlayerId ? { substitutionInPlayerId: options.substitutionInPlayerId } : {}),
+    type: eventType, minute: Math.floor(e2 / 60), elapsedSeconds: e2, clock: formatClock(e2),
   })
-
   return { ok: true as const }
 }
 
-export const updateSettings = (payload: Partial<MatchSettings>) => {
-  liveMatchStore.settings = {
-    ...liveMatchStore.settings,
-    ...payload,
-  }
+export const updateSettings = (matchId: string, payload: Partial<MatchSettings>) => {
+  const store = getStore(matchId)
+  if (!store) return
+  store.settings = { ...store.settings, ...payload }
 }
 
-export const loadMatchForLive = (payload: {
-  leagueName: string
-  categoryName: string
-  homeTeam: RegisteredTeam
-  awayTeam: RegisteredTeam
-  playersOnField: number
-  matchMinutes: number
-  breakMinutes: number
-}) => {
-  liveMatchStore.leagueName = payload.leagueName
-  liveMatchStore.categoryName = payload.categoryName
-  liveMatchStore.homeTeam = createTeamFromRegistered(payload.homeTeam, payload.playersOnField)
-  liveMatchStore.awayTeam = createTeamFromRegistered(payload.awayTeam, payload.playersOnField)
-  liveMatchStore.settings = {
-    playersOnField: payload.playersOnField,
-    matchMinutes: payload.matchMinutes,
-    breakMinutes: payload.breakMinutes,
-    homeHasBye: false,
-    awayHasBye: false,
-  }
-  liveMatchStore.timer = {
-    running: false,
-    startedAt: null,
-    elapsedSeconds: 0,
-  }
-  liveMatchStore.status = 'scheduled'
-  liveMatchStore.events = []
-}
-
-export const buildLiveSnapshot = () => ({
-  ...liveMatchStore,
-  timer: {
-    ...liveMatchStore.timer,
-    elapsedSeconds: getElapsedSeconds(),
+export const loadMatchForLive = (
+  matchId: string,
+  payload: {
+    leagueName: string
+    categoryName: string
+    homeTeam: RegisteredTeam
+    awayTeam: RegisteredTeam
+    playersOnField: number
+    matchMinutes: number
+    breakMinutes: number
   },
-  currentMinute: getCurrentMinute(),
-})
+) => {
+  liveStores.set(matchId, {
+    id: matchId,
+    leagueName: payload.leagueName,
+    categoryName: payload.categoryName,
+    homeTeam: createTeamFromRegistered(payload.homeTeam, payload.playersOnField),
+    awayTeam: createTeamFromRegistered(payload.awayTeam, payload.playersOnField),
+    settings: {
+      playersOnField: payload.playersOnField,
+      matchMinutes: payload.matchMinutes,
+      breakMinutes: payload.breakMinutes,
+      homeHasBye: false,
+      awayHasBye: false,
+    },
+    timer: { running: false, startedAt: null, elapsedSeconds: 0 },
+    status: 'scheduled',
+    events: [],
+  })
+}
 
-// Ahora que buildLiveSnapshot está definido, inicializamos broadcastLive con su implementación real.
-broadcastLive = () => {
-  _emitIO('live:update', buildLiveSnapshot());
-};
+export const buildLiveSnapshot = (matchId: string): LiveMatch & { currentMinute: number } => {
+  const store = getStore(matchId)
+  if (!store) {
+    return {
+      id: matchId, leagueName: '', categoryName: '', status: 'scheduled',
+      homeTeam: { id: '', name: '', players: [], starters: [], substitutes: [], redCarded: [], staffDiscipline: { director: { yellows: 0, reds: 0, sentOff: false }, assistant: { yellows: 0, reds: 0, sentOff: false } }, stats: emptyStats(), playerStats: {} },
+      awayTeam: { id: '', name: '', players: [], starters: [], substitutes: [], redCarded: [], staffDiscipline: { director: { yellows: 0, reds: 0, sentOff: false }, assistant: { yellows: 0, reds: 0, sentOff: false } }, stats: emptyStats(), playerStats: {} },
+      settings: { playersOnField: 0, matchMinutes: 0, breakMinutes: 0, homeHasBye: false, awayHasBye: false },
+      timer: { running: false, startedAt: null, elapsedSeconds: 0 },
+      events: [],
+      currentMinute: 0,
+    }
+  }
+  return {
+    ...store,
+    timer: { ...store.timer, elapsedSeconds: getElapsedSeconds(matchId) },
+    currentMinute: getCurrentMinute(matchId),
+  }
+}
+
+/** Returns snapshots of ALL active in-memory matches */
+export const buildAllLiveSnapshots = (): Array<LiveMatch & { currentMinute: number }> =>
+  Array.from(liveStores.keys()).map((id) => buildLiveSnapshot(id))
+
+/**
+ * Broadcasts the snapshot of a specific match:
+ *  - to socket room `match:<matchId>` -> event `live:update`  (per-match subscribers)
+ *  - to ALL connected clients         -> event `live:all`     (ClientPortal multi-match view)
+ */
+export const broadcastLive = (matchId: string): void => {
+  emitToRoom(`match:${matchId}`, 'live:update', buildLiveSnapshot(matchId))
+  emitLiveUpdate('live:all', buildAllLiveSnapshots())
+}
