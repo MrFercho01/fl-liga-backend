@@ -2079,71 +2079,6 @@ app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (req,
   }
 });
 
-app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, res) => {
-  try {
-    const { clientId, leagueId } = req.params;
-    const { categoryId } = req.query;
-    if (!categoryId) return res.status(400).json({ message: 'Falta categoryId' });
-
-    // 1. Liga
-    const allLeagues = await getAllLeaguesFromMongo();
-    const league = allLeagues.find(l => l.id === leagueId);
-    if (!league) return res.status(404).json({ message: 'Liga no encontrada' });
-
-    // 2. Categoría
-    const category = league.categories?.find(c => c.id === categoryId) || null;
-    if (!category) return res.status(404).json({ message: 'Categoría no encontrada en la liga' });
-
-    // 3. Equipos
-    const allTeams = await getAllTeamsFromMongo();
-    const teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
-
-    // 4. Fixture schedule
-    const allSchedules = await getAllFixtureSchedulesFromMongo();
-    const schedule = allSchedules.filter(s => s.leagueId === leagueId && s.categoryId === categoryId);
-
-    // 5. Partidos jugados
-    const allPlayedMatches = await getAllPlayedMatchesFromMongo();
-    const playedMatches = allPlayedMatches.filter(m => m.leagueId === leagueId && m.categoryId === categoryId);
-    const playedMatchIds = playedMatches.map(m => m.matchId);
-
-    // 6. Premios de ronda
-    const allRoundAwards = await getAllRoundAwardsFromMongo ? await getAllRoundAwardsFromMongo() : [];
-    const roundAwards = allRoundAwards.filter(r => r.leagueId === leagueId && r.categoryId === categoryId);
-
-    // 7. Fixture (estructura de rondas)
-    // Si tienes una función para generar la estructura de rondas, úsala aquí. Si no, puedes dejarlo como schedule.
-    // Por ahora, devolvemos el schedule como fixture.
-    const fixture = schedule;
-
-    res.json({
-      data: {
-        league: {
-          id: league.id,
-          name: league.name,
-          country: league.country,
-          season: league.season,
-          slogan: league.slogan,
-          themeColor: league.themeColor,
-          backgroundImageUrl: league.backgroundImageUrl,
-          logoUrl: league.logoUrl,
-        },
-        category: {
-          id: category.id,
-          name: category.name,
-        },
-        teams,
-        fixture,
-        schedule,
-        playedMatchIds,
-        playedMatches,
-        roundAwards,
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ message: 'Error al obtener fixture', error: String(err) });
-  }
-});
 app.get('/api/public/leagues', async (request, response) => {
   try {
     const leagues = await getAllLeaguesFromMongo();
@@ -2200,16 +2135,6 @@ app.post('/api/public/client/:clientId/matches/:matchId/engagement', async (requ
     response.json({ data: result });
   } catch (err) {
     response.status(500).json({ message: 'Error al guardar engagement de partido', error: String(err) });
-  }
-});
-
-app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (request, response) => {
-  try {
-    const { clientId, leagueId } = request.params;
-    const fixture = await getLeagueFixture(clientId, leagueId);
-    response.json({ data: fixture });
-  } catch (err) {
-    response.status(500).json({ message: 'Error al obtener fixture', error: String(err) });
   }
 });
 
