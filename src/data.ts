@@ -348,6 +348,8 @@ export interface RuleSet {
   finalStageFinalTwoLegged?: boolean
   doubleRoundRobin?: boolean
   regularSeasonRounds?: number
+  seriesCount?: 3 | 5
+  walkoversGoalDiff?: number
 }
 
 export interface Category {
@@ -525,6 +527,8 @@ export interface PlayedMatchRecord {
   }>
   highlightVideos: MatchHighlightVideo[]
   playedAt: string
+  walkover?: boolean
+  walkoverWinner?: 'home' | 'away'
 }
 
 export interface FixtureScheduleEntry {
@@ -685,3 +689,31 @@ const buildGoalTimeline = (homeGoals: number, awayGoals: number, homeTeamName: s
 
 
 // Eliminadas funciones de snapshot, persistencia local y stores en memoria. Toda la lógica es granular y MongoDB.
+
+// ─── Knockout Brackets ──────────────────────────────────────────────────────
+
+import type { KnockoutBracket } from './knockout'
+
+export const getKnockoutBracketsCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado')
+  if (!mongoDb) await connectMongo()
+  return mongoDb!.collection<KnockoutBracket>('knockout_brackets')
+}
+
+export const getKnockoutBracket = async (leagueId: string, categoryId: string): Promise<KnockoutBracket | null> => {
+  const col = await getKnockoutBracketsCollection()
+  const doc = await col.findOne({ leagueId, categoryId })
+  if (!doc) return null
+  const { _id: _omit, ...rest } = doc as any
+  return rest as KnockoutBracket
+}
+
+export const saveKnockoutBracket = async (bracket: KnockoutBracket): Promise<void> => {
+  const col = await getKnockoutBracketsCollection()
+  await col.replaceOne({ leagueId: bracket.leagueId, categoryId: bracket.categoryId }, bracket, { upsert: true })
+}
+
+export const deleteKnockoutBracket = async (leagueId: string, categoryId: string): Promise<void> => {
+  const col = await getKnockoutBracketsCollection()
+  await col.deleteOne({ leagueId, categoryId })
+}

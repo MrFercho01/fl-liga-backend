@@ -79,6 +79,19 @@ export interface MatchTimer {
   elapsedSeconds: number
 }
 
+export type LiveMatchPhase = 'first_half' | 'second_half' | 'penalty_shootout'
+
+export interface PenaltyKick {
+  team: 'home' | 'away'
+  result: 'goal' | 'miss'
+}
+
+export interface PenaltyShootoutData {
+  kicks: PenaltyKick[]
+  homeScore: number
+  awayScore: number
+}
+
 export interface MatchEvent {
   id: string
   timestamp: string
@@ -97,11 +110,13 @@ export interface LiveMatch {
   leagueName: string
   categoryName: string
   status: 'scheduled' | 'live' | 'finished'
+  phase?: LiveMatchPhase
   homeTeam: TeamLive
   awayTeam: TeamLive
   settings: MatchSettings
   timer: MatchTimer
   events: MatchEvent[]
+  penaltyShootout?: PenaltyShootoutData
 }
 
 /** All in-memory live match stores, keyed by matchId */
@@ -558,6 +573,35 @@ export const loadMatchForLive = (
     status: 'scheduled',
     events: [],
   })
+}
+
+// ─── Penalty shootout ─────────────────────────────────────────────────────────
+
+export const startPenaltyShootout = (matchId: string): { ok: boolean; message: string } => {
+  const store = getStore(matchId)
+  if (!store) return { ok: false, message: 'Partido no encontrado' }
+  if (store.status !== 'live') return { ok: false, message: 'El partido debe estar en estado live' }
+  if (store.phase === 'penalty_shootout') return { ok: false, message: 'La tanda de penales ya está activa' }
+  store.phase = 'penalty_shootout'
+  store.penaltyShootout = { kicks: [], homeScore: 0, awayScore: 0 }
+  return { ok: true, message: 'Tanda de penales iniciada' }
+}
+
+export const registerPenaltyKick = (
+  matchId: string,
+  team: 'home' | 'away',
+  result: 'goal' | 'miss',
+): { ok: boolean; message: string } => {
+  const store = getStore(matchId)
+  if (!store) return { ok: false, message: 'Partido no encontrado' }
+  if (store.phase !== 'penalty_shootout') return { ok: false, message: 'La tanda de penales no está activa' }
+  if (!store.penaltyShootout) store.penaltyShootout = { kicks: [], homeScore: 0, awayScore: 0 }
+  store.penaltyShootout.kicks.push({ team, result })
+  if (result === 'goal') {
+    if (team === 'home') store.penaltyShootout.homeScore += 1
+    else store.penaltyShootout.awayScore += 1
+  }
+  return { ok: true, message: 'Tiro registrado' }
 }
 
 export const buildLiveSnapshot = (matchId: string): LiveMatch & { currentMinute: number } => {

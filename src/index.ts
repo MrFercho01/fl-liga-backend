@@ -10,7 +10,7 @@ import { broadcastLive } from './live';
 import { z } from 'zod';
 import cors from 'cors';
 import express from 'express';
-import type { RegisteredTeam, RegisteredPlayer } from './data';
+import type { RegisteredTeam, RegisteredPlayer, Category } from './data';
 import { ensurePublicEngagement } from './engagement';
 import { getTeamsCollection, connectMongo, getLeaguesCollection } from './data';
 import { transcodeVideoIfPossible } from './utils';
@@ -42,9 +42,12 @@ import {
   liveStores,
   setTimerAction,
   setMatchStatusAction,
+  startPenaltyShootout,
+  registerPenaltyKick,
 } from './live';
 import { setupSocketIO } from './io';
 import { requireAuth } from './requireAuth';
+import { createCategorySchema, updateCategorySchema, createKnockoutSchema, knockoutResultSchema } from './schemas';
 import {
   getAllLeaguesFromMongo,
   saveLeagueToMongo,
@@ -73,7 +76,17 @@ import {
   saveClientEngagement,
   getAllUsersFromMongo,
   ensureCoreReadIndexes,
+  getKnockoutBracket,
+  saveKnockoutBracket,
+  deleteKnockoutBracket,
 } from './data';
+import {
+  buildBracket,
+  advanceWinner,
+  buildFixtureEntriesForRound,
+  getAvailableFormats,
+  parseKnockoutMatchId,
+} from './knockout';
 // ENDPOINTS AVANZADOS COMENTADOS PARA COMPILACIÓN LIMPIA
 import { buildTeamNameAliases, resolveTeamFromAliasMap } from './team-alias';
 import { vapidPublicKey, addPushSubscription, removePushSubscription, sendPushToMatch } from './webpush';
@@ -231,6 +244,256 @@ app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', async (re
   }
 });
 
+const defaultCategoryRules = {
+  playersOnField: 11,
+  maxRegisteredPlayers: 25,
+  matchMinutes: 90,
+  breakMinutes: 15,
+  allowDraws: true,
+  pointsWin: 3,
+  pointsDraw: 1,
+  pointsLoss: 0,
+  courtsCount: 1,
+  resolveDrawByPenalties: false,
+  playoffQualifiedTeams: 8,
+  playoffHomeAway: false,
+  finalStageRoundOf16Enabled: false,
+  finalStageRoundOf8Enabled: false,
+  finalStageQuarterFinalsEnabled: true,
+  finalStageSemiFinalsEnabled: true,
+  finalStageFinalEnabled: true,
+  finalStageTwoLegged: false,
+  finalStageRoundOf16TwoLegged: false,
+  finalStageRoundOf8TwoLegged: false,
+  finalStageQuarterFinalsTwoLegged: false,
+  finalStageSemiFinalsTwoLegged: false,
+  finalStageFinalTwoLegged: false,
+  doubleRoundRobin: false,
+  regularSeasonRounds: 9,
+};
+
+const canManageLeague = (user: { role?: string; id?: string }, league: { ownerUserId: string }) =>
+  user.role === 'super_admin' || league.ownerUserId === user.id;
+
+app.get('/api/admin/leagues/:leagueId/categories', async (request, response) => {
+  const user = await requireAuth(request, response);
+  if (!user) return;
+
+  const allLeagues = await getAllLeaguesFromMongo();
+  const league = allLeagues.find((item) => item.id === request.params.leagueId);
+  if (!league) {
+    response.status(404).json({ message: 'Liga no encontrada' });
+    return;
+  }
+
+  if (!canManageLeague(user, league)) {
+    response.status(403).json({ message: 'No tienes acceso a esta liga' });
+    return;
+  }
+
+  response.json({ ok: true, data: Array.isArray(league.categories) ? league.categories : [] });
+});
+
+app.post('/api/admin/leagues/:leagueId/categories', async (request, response) => {
+  const user = await requireAuth(request, response);
+  if (!user) return;
+
+  const allLeagues = await getAllLeaguesFromMongo();
+  const leagueIndex = allLeagues.findIndex((item) => item.id === request.params.leagueId);
+  if (leagueIndex === -1) {
+    response.status(404).json({ message: 'Liga no encontrada' });
+    return;
+  }
+
+  const league = allLeagues[leagueIndex];
+  if (!league) {
+    response.status(404).json({ message: 'Liga no encontrada' });
+    return;
+  }
+
+  if (!canManageLeague(user, league)) {
+    response.status(403).json({ message: 'No tienes acceso a esta liga' });
+    return;
+  }
+
+  const parsed = createCategorySchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() });
+    return;
+  }
+
+  if (parsed.data.maxAge !== null && parsed.data.maxAge < parsed.data.minAge) {
+    response.status(400).json({ message: 'El rango de edad es inválido: maxAge no puede ser menor que minAge' });
+    return;
+  }
+
+  const currentCategories = Array.isArray(league.categories) ? league.categories : [];
+  const duplicatedName = currentCategories.some(
+    (category) => category.name.trim().toLowerCase() === parsed.data.name.trim().toLowerCase(),
+  );
+  if (duplicatedName) {
+    response.status(409).json({ message: 'Ya existe una categoría con ese nombre en esta liga' });
+    return;
+  }
+
+  const fallbackRules = currentCategories[0]?.rules ?? defaultCategoryRules;
+  const nextCategory = {
+    id: uuidv4(),
+    name: parsed.data.name,
+    minAge: parsed.data.minAge,
+    maxAge: parsed.data.maxAge,
+    rules: parsed.data.rules ?? fallbackRules,
+  };
+
+  const nextLeague = {
+    ...league,
+    categories: [...currentCategories, nextCategory],
+  };
+
+  await saveLeagueToMongo(nextLeague);
+  response.json({ ok: true, data: nextCategory });
+});
+
+app.patch('/api/admin/leagues/:leagueId/categories/:categoryId', async (request, response) => {
+  const user = await requireAuth(request, response);
+  if (!user) return;
+
+  const allLeagues = await getAllLeaguesFromMongo();
+  const leagueIndex = allLeagues.findIndex((item) => item.id === request.params.leagueId);
+  if (leagueIndex === -1) {
+    response.status(404).json({ message: 'Liga no encontrada' });
+    return;
+  }
+
+  const league = allLeagues[leagueIndex];
+  if (!league) {
+    response.status(404).json({ message: 'Liga no encontrada' });
+    return;
+  }
+
+  if (!canManageLeague(user, league)) {
+    response.status(403).json({ message: 'No tienes acceso a esta liga' });
+    return;
+  }
+
+  const parsed = updateCategorySchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() });
+    return;
+  }
+
+  const currentCategories = Array.isArray(league.categories) ? league.categories : [];
+  const categoryIndex = currentCategories.findIndex((category) => category.id === request.params.categoryId);
+  if (categoryIndex === -1) {
+    response.status(404).json({ message: 'Categoría no encontrada' });
+    return;
+  }
+
+  const currentCategory = currentCategories[categoryIndex];
+  if (!currentCategory) {
+    response.status(404).json({ message: 'Categoría no encontrada' });
+    return;
+  }
+
+  const nextName = parsed.data.name ?? currentCategory.name;
+  const duplicatedName = currentCategories.some(
+    (category) =>
+      category.id !== currentCategory.id &&
+      category.name.trim().toLowerCase() === nextName.trim().toLowerCase(),
+  );
+  if (duplicatedName) {
+    response.status(409).json({ message: 'Ya existe una categoría con ese nombre en esta liga' });
+    return;
+  }
+
+  const nextMinAge = parsed.data.minAge ?? currentCategory.minAge;
+  const nextMaxAge = parsed.data.maxAge !== undefined ? parsed.data.maxAge : currentCategory.maxAge;
+  if (nextMaxAge !== null && nextMaxAge < nextMinAge) {
+    response.status(400).json({ message: 'El rango de edad es inválido: maxAge no puede ser menor que minAge' });
+    return;
+  }
+
+  const nextCategory: Category = {
+    ...currentCategory,
+    ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+    ...(parsed.data.minAge !== undefined ? { minAge: parsed.data.minAge } : {}),
+    ...(parsed.data.maxAge !== undefined ? { maxAge: parsed.data.maxAge } : {}),
+    ...(parsed.data.rules !== undefined ? { rules: parsed.data.rules as Category['rules'] } : {}),
+  };
+
+  const nextCategories = [...currentCategories];
+  nextCategories[categoryIndex] = nextCategory;
+
+  const nextLeague = {
+    ...league,
+    categories: nextCategories,
+  };
+
+  await saveLeagueToMongo(nextLeague);
+  response.json({ ok: true, data: nextCategory });
+});
+
+app.delete('/api/admin/leagues/:leagueId/categories/:categoryId', async (request, response) => {
+  const user = await requireAuth(request, response);
+  if (!user) return;
+
+  const allLeagues = await getAllLeaguesFromMongo();
+  const leagueIndex = allLeagues.findIndex((item) => item.id === request.params.leagueId);
+  if (leagueIndex === -1) {
+    response.status(404).json({ message: 'Liga no encontrada' });
+    return;
+  }
+
+  const league = allLeagues[leagueIndex];
+  if (!league) {
+    response.status(404).json({ message: 'Liga no encontrada' });
+    return;
+  }
+
+  if (!canManageLeague(user, league)) {
+    response.status(403).json({ message: 'No tienes acceso a esta liga' });
+    return;
+  }
+
+  const currentCategories = Array.isArray(league.categories) ? league.categories : [];
+  const category = currentCategories.find((item) => item.id === request.params.categoryId);
+  if (!category) {
+    response.status(404).json({ message: 'Categoría no encontrada' });
+    return;
+  }
+
+  if (currentCategories.length <= 1) {
+    response.status(409).json({ message: 'La liga debe conservar al menos una categoría' });
+    return;
+  }
+
+  const [teams, playedMatches, fixtureSchedules] = await Promise.all([
+    getTeamsByLeagueAndCategoryFromMongo(league.id, category.id, false),
+    getPlayedMatchesByLeagueAndCategoryFromMongo(league.id, category.id),
+    getFixtureSchedulesByLeagueAndCategoryFromMongo(league.id, category.id),
+  ]);
+
+  if (teams.length > 0 || playedMatches.length > 0 || fixtureSchedules.length > 0) {
+    response.status(409).json({
+      message: 'No se puede eliminar la categoría porque tiene información asociada',
+      data: {
+        teams: teams.length,
+        playedMatches: playedMatches.length,
+        fixtureSchedules: fixtureSchedules.length,
+      },
+    });
+    return;
+  }
+
+  const nextLeague = {
+    ...league,
+    categories: currentCategories.filter((item) => item.id !== category.id),
+  };
+
+  await saveLeagueToMongo(nextLeague);
+  response.json({ ok: true, data: { id: category.id } });
+});
+
 // Endpoint: obtener ligas según usuario autenticado (cliente: solo sus ligas, superadmin: todas)
 app.get('/api/leagues', async (req, res) => {
   try {
@@ -327,7 +590,7 @@ app.get('/api/admin/leagues/:leagueId/round-awards-ranking', async (req, res) =>
 });
 
 // Partidos jugados por liga/categoría
-app.get('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
+app.get('/api/_legacy/admin/leagues/:leagueId/played-matches', async (req, res) => {
   const { leagueId } = req.params;
   const { categoryId } = req.query;
   try {
@@ -539,7 +802,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
         let homeTeamId: string | null = null;
         let awayTeamId: string | null = null;
 
-        if (matchId.startsWith('manual__')) {
+        if (matchId.startsWith('manual__') || matchId.startsWith('ko__')) {
           const parts = matchId.split('__');
           homeTeamId = parts[2] ?? null;
           awayTeamId = parts[3] ?? null;
@@ -568,7 +831,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
         let homeTeamId: string | null = null;
         let awayTeamId: string | null = null;
         const round = pm.round;
-        if (matchId.startsWith('manual__')) {
+        if (matchId.startsWith('manual__') || matchId.startsWith('ko__')) {
           const parts = matchId.split('__');
           homeTeamId = parts[2] ?? null;
           awayTeamId = parts[3] ?? null;
@@ -869,7 +1132,7 @@ app.get('/api/admin/leagues/:leagueId/highlight-videos', async (req, res) => {
   }
 });
 // Guardar partido jugado
-app.post('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
+app.post('/api/_legacy/admin/leagues/:leagueId/played-matches', async (req, res) => {
   try {
     const { leagueId } = req.params;
     const match = { ...req.body, leagueId };
@@ -918,7 +1181,7 @@ app.get('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
   }
 });
 // Eliminar schedule de un partido
-app.delete('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, res) => {
+app.delete('/api/_legacy/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, res) => {
   try {
     const { leagueId, matchId } = req.params;
     const { categoryId } = req.query;
@@ -931,7 +1194,7 @@ app.delete('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (req,
   }
 });
 // Guardar schedule de un partido
-app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, res) => {
+app.post('/api/_legacy/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, res) => {
   try {
     const { leagueId, matchId } = req.params;
     const { categoryId, ...rest } = req.body;
@@ -944,7 +1207,7 @@ app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, r
   }
 });
 // Schedule de una liga para administración
-app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (req, res) => {
+app.get('/api/_legacy/admin/leagues/:leagueId/fixture-schedule', async (req, res) => {
   try {
     const { leagueId } = req.params;
     const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
@@ -958,7 +1221,7 @@ app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (req, res) => {
   }
 });
 // Fixture de una liga para administración
-app.get('/api/admin/leagues/:leagueId/fixture', async (req, res) => {
+app.get('/api/_legacy/admin/leagues/:leagueId/fixture', async (req, res) => {
   try {
     const { leagueId } = req.params;
     const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
@@ -2775,7 +3038,9 @@ const playedMatchSchema = z.object({
       ]),
       teamName: z.string(),
       playerName: z.string(),
+      playerId: z.string().optional(),
       substitutionInPlayerName: z.string().optional(),
+      substitutionInPlayerId: z.string().optional(),
       staffRole: z.enum(['director', 'assistant']).optional(),
     }),
   ),
@@ -2787,6 +3052,8 @@ const playedMatchSchema = z.object({
     }),
   ),
   playedAt: z.string(),
+  walkover: z.boolean().optional(),
+  walkoverWinner: z.enum(['home', 'away']).optional(),
 })
 
 app.post('/api/admin/leagues/:leagueId/played-matches', async (request, response) => {
@@ -2854,7 +3121,9 @@ app.post('/api/admin/leagues/:leagueId/played-matches', async (request, response
       type: event.type,
       teamName: event.teamName,
       playerName: event.playerName,
+      ...(event.playerId ? { playerId: event.playerId } : {}),
       ...(event.substitutionInPlayerName ? { substitutionInPlayerName: event.substitutionInPlayerName } : {}),
+      ...(event.substitutionInPlayerId ? { substitutionInPlayerId: event.substitutionInPlayerId } : {}),
       ...(event.staffRole ? { staffRole: event.staffRole } : {}),
     })),
     highlightVideos: (parsed.data.highlightVideos || []).map((v: any) => ({ ...v, leagueId: parsed.data.leagueId })),
@@ -2864,6 +3133,53 @@ app.post('/api/admin/leagues/:leagueId/played-matches', async (request, response
 
   // Guardar o actualizar en MongoDB
   await savePlayedMatchToMongo(nextRecord)
+
+  // ── Knockout hook: if this match belongs to a bracket, advance the winner ──
+  const koInfo = parseKnockoutMatchId(parsed.data.matchId)
+  if (koInfo) {
+    try {
+      const bracket = await getKnockoutBracket(parsed.data.leagueId, parsed.data.categoryId)
+      if (bracket && bracket.id === koInfo.bracketId) {
+        // Find the KnockoutMatch by roundIdx + slot
+        const round = bracket.rounds[koInfo.roundIdx]
+        const koMatch = round?.matches.find((m) => m.slot === koInfo.slot)
+        if (koMatch && koMatch.status === 'pending') {
+          const homeGoals = parsed.data.homeStats.goals
+          const awayGoals = parsed.data.awayStats.goals
+          // Determine winner: penalties decide if draw
+          let winnerId: string
+          let winnerName: string
+          if (parsed.data.penaltyShootout) {
+            const homeWins = parsed.data.penaltyShootout.home > parsed.data.penaltyShootout.away
+            winnerId = homeWins ? (koMatch.homeTeamId ?? '') : (koMatch.awayTeamId ?? '')
+            winnerName = homeWins ? (koMatch.homeTeamName ?? '') : (koMatch.awayTeamName ?? '')
+          } else {
+            const homeWins = homeGoals > awayGoals
+            winnerId = homeWins ? (koMatch.homeTeamId ?? '') : (koMatch.awayTeamId ?? '')
+            winnerName = homeWins ? (koMatch.homeTeamName ?? '') : (koMatch.awayTeamName ?? '')
+          }
+          const { updatedBracket, newFixtureEntries } = advanceWinner(
+            bracket,
+            koMatch.id,
+            winnerId,
+            winnerName,
+            homeGoals,
+            awayGoals,
+            parsed.data.penaltyShootout ? parsed.data.penaltyShootout.home : null,
+            parsed.data.penaltyShootout ? parsed.data.penaltyShootout.away : null,
+          )
+          await saveKnockoutBracket(updatedBracket)
+          for (const entry of newFixtureEntries) {
+            await saveFixtureScheduleToMongo(entry)
+          }
+        }
+      }
+    } catch (koErr) {
+      console.error('[knockout] hook error on played-match save:', koErr)
+      // Non-fatal: result is already saved
+    }
+  }
+
   response.json({ data: nextRecord })
 })
 
@@ -3338,6 +3654,58 @@ app.post('/api/admin/live/timer', (request, response) => {
   response.json({ data: buildLiveSnapshot(matchId) })
 })
 
+// --- Penalty shootout endpoints ---
+
+const penaltyStartSchema = z.object({
+  matchId: z.string().min(1),
+})
+
+app.post('/api/admin/live/penalty/start', (request, response) => {
+  const user = requireAuth(request, response)
+  if (!user) return
+
+  const parsed = penaltyStartSchema.safeParse(request.body)
+  if (!parsed.success) {
+    response.status(400).json({ message: 'Payload inválido' })
+    return
+  }
+
+  const result = startPenaltyShootout(parsed.data.matchId)
+  if (!result.ok) {
+    response.status(400).json({ message: result.message })
+    return
+  }
+
+  broadcastLive(parsed.data.matchId)
+  response.json({ data: buildLiveSnapshot(parsed.data.matchId) })
+})
+
+const penaltyKickSchema = z.object({
+  matchId: z.string().min(1),
+  team: z.enum(['home', 'away']),
+  result: z.enum(['goal', 'miss']),
+})
+
+app.post('/api/admin/live/penalty/kick', (request, response) => {
+  const user = requireAuth(request, response)
+  if (!user) return
+
+  const parsed = penaltyKickSchema.safeParse(request.body)
+  if (!parsed.success) {
+    response.status(400).json({ message: 'Payload inválido' })
+    return
+  }
+
+  const result = registerPenaltyKick(parsed.data.matchId, parsed.data.team, parsed.data.result)
+  if (!result.ok) {
+    response.status(400).json({ message: result.message })
+    return
+  }
+
+  broadcastLive(parsed.data.matchId)
+  response.json({ data: buildLiveSnapshot(parsed.data.matchId) })
+})
+
 // --- Lineup schema (corregido fuera del PATCH) ---
 const lineupSchema = z.object({
   matchId: z.string().min(1),
@@ -3519,6 +3887,163 @@ app.post('/api/push/unsubscribe', (request, response) => {
 // En producción, los eventos live:update se emiten por socket.io
 // En desarrollo, se mantiene el stub/broadcastLive local
 
+// ─── KNOCKOUT BRACKET ENDPOINTS ────────────────────────────────────────────
+
+/** GET available formats for N qualified teams */
+app.get('/api/admin/leagues/:leagueId/categories/:categoryId/knockout/formats', requireAuth, async (req, res) => {
+  const n = parseInt(req.query.n as string, 10)
+  if (!n || n < 2) {
+    res.status(400).json({ message: 'Parámetro n inválido' })
+    return
+  }
+  res.json({ data: getAvailableFormats(n) })
+})
+
+/** GET current bracket (public) */
+app.get('/api/public/leagues/:leagueId/categories/:categoryId/knockout', async (req, res) => {
+  try {
+    const leagueId = req.params.leagueId as string
+    const categoryId = req.params.categoryId as string
+    const bracket = await getKnockoutBracket(leagueId, categoryId)
+    res.json({ data: bracket ?? null })
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener bracket' })
+  }
+})
+
+/** GET current bracket (admin) */
+app.get('/api/admin/leagues/:leagueId/categories/:categoryId/knockout', requireAuth, async (req, res) => {
+  try {
+    const leagueId = req.params.leagueId as string
+    const categoryId = req.params.categoryId as string
+    const bracket = await getKnockoutBracket(leagueId, categoryId)
+    res.json({ data: bracket ?? null })
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener bracket' })
+  }
+})
+
+/** POST create bracket → also creates first-round fixture entries */
+app.post('/api/admin/leagues/:leagueId/categories/:categoryId/knockout', requireAuth, async (req, res) => {
+  try {
+    const user = await requireAuth(req as any, res as any)
+    if (!user) return
+
+    const leagueId = req.params.leagueId as string
+    const categoryId = req.params.categoryId as string
+    const allLeagues = await getAllLeaguesFromMongo()
+    const league = allLeagues.find((l) => l.id === leagueId)
+    if (!league) { res.status(404).json({ message: 'Liga no encontrada' }); return }
+    if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
+      res.status(403).json({ message: 'Sin acceso' }); return
+    }
+
+    const parsed = createKnockoutSchema.safeParse(req.body)
+    if (!parsed.success) { res.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() }); return }
+
+    const bracket = buildBracket({
+      leagueId,
+      categoryId,
+      format: parsed.data.format,
+      seedingMethod: parsed.data.seedingMethod,
+      qualifiedTeams: parsed.data.qualifiedTeams,
+    })
+
+    await saveKnockoutBracket(bracket)
+
+    const firstRoundEntries = buildFixtureEntriesForRound(bracket, 0)
+    for (const entry of firstRoundEntries) {
+      await saveFixtureScheduleToMongo(entry)
+    }
+
+    if (bracket.rounds.length > 1) {
+      const round1Entries = buildFixtureEntriesForRound(bracket, 1)
+      for (const entry of round1Entries) {
+        await saveFixtureScheduleToMongo(entry)
+      }
+    }
+
+    res.status(201).json({ data: bracket })
+  } catch (err) {
+    console.error('[knockout] create error:', err)
+    res.status(500).json({ message: 'Error al crear bracket' })
+  }
+})
+
+/** PUT register match result → advances winner, creates next fixture entry */
+app.put('/api/admin/leagues/:leagueId/categories/:categoryId/knockout/result', requireAuth, async (req, res) => {
+  try {
+    const user = await requireAuth(req as any, res as any)
+    if (!user) return
+
+    const leagueId = req.params.leagueId as string
+    const categoryId = req.params.categoryId as string
+    const allLeagues = await getAllLeaguesFromMongo()
+    const league = allLeagues.find((l) => l.id === leagueId)
+    if (!league) { res.status(404).json({ message: 'Liga no encontrada' }); return }
+    if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
+      res.status(403).json({ message: 'Sin acceso' }); return
+    }
+
+    const parsed = knockoutResultSchema.safeParse(req.body)
+    if (!parsed.success) { res.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() }); return }
+
+    const bracket = await getKnockoutBracket(leagueId, categoryId)
+    if (!bracket) { res.status(404).json({ message: 'Bracket no encontrado' }); return }
+
+    const { updatedBracket, newFixtureEntries } = advanceWinner(
+      bracket,
+      parsed.data.knockoutMatchId,
+      parsed.data.winnerId,
+      parsed.data.winnerName,
+      parsed.data.homeGoals,
+      parsed.data.awayGoals,
+      parsed.data.penaltyHome ?? null,
+      parsed.data.penaltyAway ?? null,
+    )
+
+    await saveKnockoutBracket(updatedBracket)
+    for (const entry of newFixtureEntries) {
+      await saveFixtureScheduleToMongo(entry)
+    }
+
+    res.json({ data: updatedBracket })
+  } catch (err) {
+    console.error('[knockout] result error:', err)
+    res.status(500).json({ message: 'Error al registrar resultado' })
+  }
+})
+
+/** DELETE reset bracket and remove its fixture entries */
+app.delete('/api/admin/leagues/:leagueId/categories/:categoryId/knockout', requireAuth, async (req, res) => {
+  try {
+    const user = await requireAuth(req as any, res as any)
+    if (!user) return
+
+    const leagueId = req.params.leagueId as string
+    const categoryId = req.params.categoryId as string
+    const allLeagues = await getAllLeaguesFromMongo()
+    const league = allLeagues.find((l) => l.id === leagueId)
+    if (!league) { res.status(404).json({ message: 'Liga no encontrada' }); return }
+    if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
+      res.status(403).json({ message: 'Sin acceso' }); return
+    }
+
+    const bracket = await getKnockoutBracket(leagueId, categoryId)
+    if (bracket) {
+      const schedCol = await getFixtureScheduleCollection()
+      await (schedCol as any).deleteMany({ leagueId, categoryId, round: { $gte: 1001 } })
+    }
+
+    await deleteKnockoutBracket(leagueId, categoryId)
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[knockout] delete error:', err)
+    res.status(500).json({ message: 'Error al eliminar bracket' })
+  }
+})
+
+// ─── END KNOCKOUT ───────────────────────────────────────────────────────────
 
 const startServer = async () => {
   await initializeDataStore();
