@@ -10,7 +10,7 @@ import { broadcastLive } from './live';
 import { z } from 'zod';
 import cors from 'cors';
 import express from 'express';
-import type { RegisteredTeam, RegisteredPlayer, Category } from './data';
+import type { RegisteredTeam, RegisteredPlayer, Category, RuleSet } from './data';
 import { ensurePublicEngagement } from './engagement';
 import { getTeamsCollection, connectMongo, getLeaguesCollection } from './data';
 import { transcodeVideoIfPossible } from './utils';
@@ -3143,34 +3143,59 @@ app.post('/api/admin/leagues/:leagueId/played-matches', async (request, response
         // Find the KnockoutMatch by roundIdx + slot
         const round = bracket.rounds[koInfo.roundIdx]
         const koMatch = round?.matches.find((m) => m.slot === koInfo.slot)
-        if (koMatch && koMatch.status === 'pending') {
+        if (koMatch) {
+          const leg = koInfo.leg
           const homeGoals = parsed.data.homeStats.goals
           const awayGoals = parsed.data.awayStats.goals
-          // Determine winner: penalties decide if draw
-          let winnerId: string
-          let winnerName: string
-          if (parsed.data.penaltyShootout) {
-            const homeWins = parsed.data.penaltyShootout.home > parsed.data.penaltyShootout.away
-            winnerId = homeWins ? (koMatch.homeTeamId ?? '') : (koMatch.awayTeamId ?? '')
-            winnerName = homeWins ? (koMatch.homeTeamName ?? '') : (koMatch.awayTeamName ?? '')
-          } else {
-            const homeWins = homeGoals > awayGoals
-            winnerId = homeWins ? (koMatch.homeTeamId ?? '') : (koMatch.awayTeamId ?? '')
-            winnerName = homeWins ? (koMatch.homeTeamName ?? '') : (koMatch.awayTeamName ?? '')
+
+          // For single-leg or leg 2 two-legged: determine winner
+          let winnerId = ''
+          let winnerName = ''
+
+          if (!koMatch.twoLegged || leg === 2) {
+            // For leg 2: homeGoals/awayGoals are for the swapped fixture
+            // We need the aggregate to determine winner
+            let homeAggregate = homeGoals
+            let awayAggregate = awayGoals
+            if (koMatch.twoLegged && leg === 2) {
+              homeAggregate = (koMatch.leg1HomeGoals ?? 0) + awayGoals  // homeTeam leg1 + leg2 away
+              awayAggregate = (koMatch.leg1AwayGoals ?? 0) + homeGoals  // awayTeam leg1 + leg2 home
+            }
+
+            if (parsed.data.penaltyShootout) {
+              // Penalty shootout decides (aggregate was level)
+              const homeWins = parsed.data.penaltyShootout.home > parsed.data.penaltyShootout.away
+              winnerId = homeWins ? (koMatch.homeTeamId ?? '') : (koMatch.awayTeamId ?? '')
+              winnerName = homeWins ? (koMatch.homeTeamName ?? '') : (koMatch.awayTeamName ?? '')
+            } else {
+              const homeWins = homeAggregate > awayAggregate
+              winnerId = homeWins ? (koMatch.homeTeamId ?? '') : (koMatch.awayTeamId ?? '')
+              winnerName = homeWins ? (koMatch.homeTeamName ?? '') : (koMatch.awayTeamName ?? '')
+            }
           }
-          const { updatedBracket, newFixtureEntries } = advanceWinner(
-            bracket,
-            koMatch.id,
-            winnerId,
-            winnerName,
-            homeGoals,
-            awayGoals,
-            parsed.data.penaltyShootout ? parsed.data.penaltyShootout.home : null,
-            parsed.data.penaltyShootout ? parsed.data.penaltyShootout.away : null,
-          )
-          await saveKnockoutBracket(updatedBracket)
-          for (const entry of newFixtureEntries) {
-            await saveFixtureScheduleToMongo(entry)
+
+          // Only call advanceWinner if: single-leg pending, OR two-legged and current leg hasn't been recorded
+          const shouldProcess =
+            (!koMatch.twoLegged && koMatch.status === 'pending') ||
+            (koMatch.twoLegged && leg === 1 && !koMatch.leg1Done) ||
+            (koMatch.twoLegged && leg === 2 && !koMatch.leg2Done)
+
+          if (shouldProcess) {
+            const { updatedBracket, newFixtureEntries } = advanceWinner(
+              bracket,
+              koMatch.id,
+              leg,
+              winnerId,
+              winnerName,
+              homeGoals,
+              awayGoals,
+              parsed.data.penaltyShootout ? parsed.data.penaltyShootout.home : null,
+              parsed.data.penaltyShootout ? parsed.data.penaltyShootout.away : null,
+            )
+            await saveKnockoutBracket(updatedBracket)
+            for (const entry of newFixtureEntries) {
+              await saveFixtureScheduleToMongo(entry)
+            }
           }
         }
       }
@@ -3941,12 +3966,32 @@ app.post('/api/admin/leagues/:leagueId/categories/:categoryId/knockout', require
     const parsed = createKnockoutSchema.safeParse(req.body)
     if (!parsed.success) { res.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() }); return }
 
+    // Determine which rounds are two-legged based on league/category config
+    const category = league.categories?.find((c: any) => c.id === categoryId)
+    const rules = (category?.rules ?? {}) as RuleSet
+    const twoLeggedRounds = new Set<string>()
+    if (rules.finalStageTwoLegged) {
+      // All rounds two-legged
+      twoLeggedRounds.add('Final')
+      twoLeggedRounds.add('Semifinales')
+      twoLeggedRounds.add('Cuartos de final')
+      twoLeggedRounds.add('Dieciseisavos')
+      twoLeggedRounds.add('Treintaidosavos')
+    } else {
+      if (rules.finalStageFinalTwoLegged)         twoLeggedRounds.add('Final')
+      if (rules.finalStageSemiFinalsTwoLegged)    twoLeggedRounds.add('Semifinales')
+      if (rules.finalStageQuarterFinalsTwoLegged) twoLeggedRounds.add('Cuartos de final')
+      if (rules.finalStageRoundOf16TwoLegged)     twoLeggedRounds.add('Dieciseisavos')
+      if (rules.finalStageRoundOf8TwoLegged)      twoLeggedRounds.add('Treintaidosavos')
+    }
+
     const bracket = buildBracket({
       leagueId,
       categoryId,
       format: parsed.data.format,
       seedingMethod: parsed.data.seedingMethod,
       qualifiedTeams: parsed.data.qualifiedTeams,
+      twoLeggedRounds,
     })
 
     await saveKnockoutBracket(bracket)
@@ -3991,11 +4036,25 @@ app.put('/api/admin/leagues/:leagueId/categories/:categoryId/knockout/result', r
     const bracket = await getKnockoutBracket(leagueId, categoryId)
     if (!bracket) { res.status(404).json({ message: 'Bracket no encontrado' }); return }
 
+    const leg = parsed.data.leg ?? 1
+    // Winner required for single-leg or second leg
+    if (leg !== 1 && (!parsed.data.winnerId || !parsed.data.winnerName)) {
+      res.status(400).json({ message: 'winnerId y winnerName son requeridos en la vuelta o en partidos de una pierna' })
+      return
+    }
+    // For single-leg matches, also require winner
+    const koMatchFind = bracket.rounds.flatMap(r => r.matches).find(m => m.id === parsed.data.knockoutMatchId)
+    if (koMatchFind && !koMatchFind.twoLegged && (!parsed.data.winnerId || !parsed.data.winnerName)) {
+      res.status(400).json({ message: 'winnerId y winnerName son requeridos' })
+      return
+    }
+
     const { updatedBracket, newFixtureEntries } = advanceWinner(
       bracket,
       parsed.data.knockoutMatchId,
-      parsed.data.winnerId,
-      parsed.data.winnerName,
+      leg,
+      parsed.data.winnerId ?? '',
+      parsed.data.winnerName ?? '',
       parsed.data.homeGoals,
       parsed.data.awayGoals,
       parsed.data.penaltyHome ?? null,

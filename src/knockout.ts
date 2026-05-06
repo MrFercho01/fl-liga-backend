@@ -26,6 +26,7 @@ export interface KnockoutMatch {
   homeTeamName: string | null
   awayTeamName: string | null
   isBye: boolean                // true if awayTeam is a bye → homeTeam auto-advances
+  // Single-leg goals (or aggregate for two-legged after both legs are done)
   homeGoals: number | null
   awayGoals: number | null
   penaltyHome: number | null
@@ -40,12 +41,22 @@ export interface KnockoutMatch {
   awayFromSlot: number | null
   // Fixture integration
   fixtureRound: number          // high number (1001+) so it appears after regular season
+  // Two-legged support
+  twoLegged: boolean
+  fixtureRound2: number | null  // fixture round for the return leg (fixtureRound + 50)
+  leg1HomeGoals: number | null  // goals scored by homeTeam in leg 1
+  leg1AwayGoals: number | null  // goals scored by awayTeam in leg 1
+  leg2HomeGoals: number | null  // goals scored by awayTeam (now playing at home) in leg 2
+  leg2AwayGoals: number | null  // goals scored by homeTeam (now playing away) in leg 2
+  leg1Done: boolean
+  leg2Done: boolean
 }
 
 export interface KnockoutRound {
   index: number
   name: string                  // 'Dieciseisavos', 'Octavos', 'Cuartos de final', 'Semifinales', 'Final'
   fixtureRound: number
+  twoLegged: boolean
   matches: KnockoutMatch[]
 }
 
@@ -186,8 +197,9 @@ export const buildBracket = (params: {
   format: KnockoutFormat
   seedingMethod: KnockoutSeedingMethod
   qualifiedTeams: KnockoutTeamEntry[]  // ordered by position ASC (position 1 = best)
+  twoLeggedRounds?: Set<string>        // set of round names that should be played as two legs
 }): KnockoutBracket => {
-  const { leagueId, categoryId, format, seedingMethod, qualifiedTeams } = params
+  const { leagueId, categoryId, format, seedingMethod, qualifiedTeams, twoLeggedRounds = new Set() } = params
   const slots = formatToSlots[format]
   const roundNames = formatToRoundNames[format]
   const roundCount = roundNames.length
@@ -222,6 +234,9 @@ export const buildBracket = (params: {
   for (let ri = 0; ri < roundCount; ri++) {
     const matchesInRound = slots / Math.pow(2, ri + 1)
     const fixtureRound = FIXTURE_ROUND_BASE + ri
+    const roundName = roundNames[ri]!
+    const isTwoLeggedRound = twoLeggedRounds.has(roundName)
+    const fixtureRound2 = isTwoLeggedRound ? fixtureRound + 50 : null
     const matches: KnockoutMatch[] = []
 
     for (let slot = 0; slot < matchesInRound; slot++) {
@@ -251,6 +266,14 @@ export const buildBracket = (params: {
         awayFromRoundIdx: ri > 0 ? ri - 1 : null,
         awayFromSlot: ri > 0 ? slot * 2 + 1 : null,
         fixtureRound,
+        twoLegged: isTwoLeggedRound,
+        fixtureRound2,
+        leg1HomeGoals: null,
+        leg1AwayGoals: null,
+        leg2HomeGoals: null,
+        leg2AwayGoals: null,
+        leg1Done: false,
+        leg2Done: false,
       })
 
       // Auto-advance bye winner
@@ -261,7 +284,7 @@ export const buildBracket = (params: {
       }
     }
 
-    rounds.push({ index: ri, name: roundNames[ri]!, fixtureRound, matches })
+    rounds.push({ index: ri, name: roundName, fixtureRound, twoLegged: isTwoLeggedRound, matches })
   }
 
   // Propagate bye winners into round 2 if first round has byes
@@ -303,31 +326,42 @@ export const buildBracket = (params: {
 /** Encodes a KnockoutMatch as a fixture matchId compatible with existing parser.
  *  Format: ko__<bracketId>__<homeTeamId>__<awayTeamId>__r<roundIdx>__s<slot>
  *  The existing parser reads parts[2] as homeTeamId and parts[3] as awayTeamId. */
+/** Builds a fixture matchId for a knockout match.
+ *  For two-legged rounds, pass leg=1 (ida) or leg=2 (vuelta).
+ *  Leg 2 has home/away swapped so the return leg is at the other ground. */
 export const buildKnockoutMatchId = (
   bracketId: string,
   roundIdx: number,
   slot: number,
   homeTeamId: string,
   awayTeamId: string,
-): string => `ko__${bracketId}__${homeTeamId}__${awayTeamId}__r${roundIdx}__s${slot}`
+  leg?: 1 | 2,
+): string => {
+  const base = `ko__${bracketId}__${homeTeamId}__${awayTeamId}__r${roundIdx}__s${slot}`
+  return leg ? `${base}__l${leg}` : base
+}
 
 /** Parse a knockout matchId → returns parts or null if not a knockout id */
 export const parseKnockoutMatchId = (matchId: string) => {
   if (!matchId.startsWith('ko__')) return null
   const parts = matchId.split('__')
   if (parts.length < 6) return null
+  const legPart = parts[6]
+  const leg: 1 | 2 = legPart === 'l2' ? 2 : 1
   return {
     bracketId: parts[1]!,
     homeTeamId: parts[2]!,
     awayTeamId: parts[3]!,
     roundIdx: parseInt(parts[4]!.replace('r', ''), 10),
     slot: parseInt(parts[5]!.replace('s', ''), 10),
+    leg,
   }
 }
 
 // ─── Generate fixture entries for a round ──────────────────────────────────
 
-/** Builds FixtureScheduleEntry records for all ready (both teams known) matches in a round. */
+/** Builds FixtureScheduleEntry records for all ready (both teams known) matches in a round.
+ *  For two-legged rounds, generates 2 entries per match: leg 1 (ida) and leg 2 (vuelta). */
 export const buildFixtureEntriesForRound = (
   bracket: KnockoutBracket,
   roundIdx: number,
@@ -341,14 +375,36 @@ export const buildFixtureEntriesForRound = (
     if (!match.homeTeamId || !match.awayTeamId || match.isBye) continue
     const homeId = match.homeTeamId
     const awayId = match.awayTeamId
-    entries.push({
-      leagueId: bracket.leagueId,
-      categoryId: bracket.categoryId,
-      matchId: buildKnockoutMatchId(bracketId, roundIdx, match.slot, homeId, awayId),
-      round: round.fixtureRound,
-      scheduledAt: '',   // admin will set date/time later
-      status: 'scheduled',
-    })
+
+    if (match.twoLegged) {
+      // Leg 1 (ida): home plays at home
+      entries.push({
+        leagueId: bracket.leagueId,
+        categoryId: bracket.categoryId,
+        matchId: buildKnockoutMatchId(bracketId, roundIdx, match.slot, homeId, awayId, 1),
+        round: round.fixtureRound,
+        scheduledAt: '',
+        status: 'scheduled',
+      })
+      // Leg 2 (vuelta): teams swapped — away plays at home
+      entries.push({
+        leagueId: bracket.leagueId,
+        categoryId: bracket.categoryId,
+        matchId: buildKnockoutMatchId(bracketId, roundIdx, match.slot, awayId, homeId, 2),
+        round: match.fixtureRound2 ?? round.fixtureRound + 50,
+        scheduledAt: '',
+        status: 'scheduled',
+      })
+    } else {
+      entries.push({
+        leagueId: bracket.leagueId,
+        categoryId: bracket.categoryId,
+        matchId: buildKnockoutMatchId(bracketId, roundIdx, match.slot, homeId, awayId),
+        round: round.fixtureRound,
+        scheduledAt: '',
+        status: 'scheduled',
+      })
+    }
   }
   return entries
 }
@@ -362,10 +418,13 @@ export interface AdvanceWinnerResult {
 }
 
 /** Records result in a knockout match and propagates winner to the next round.
+ *  For two-legged rounds, pass leg=1 for the first leg and leg=2 for the return leg.
+ *  The winner is only advanced (and the match marked finished) after both legs are done (leg=2).
  *  Returns the updated bracket and any new fixture entries to persist. */
 export const advanceWinner = (
   bracket: KnockoutBracket,
   knockoutMatchId: string,          // the KnockoutMatch.id (uuid)
+  leg: 1 | 2,
   winnerId: string,
   winnerName: string,
   homeGoals: number,
@@ -382,13 +441,42 @@ export const advanceWinner = (
   for (const round of updated.rounds) {
     for (const match of round.matches) {
       if (match.id === knockoutMatchId) {
-        match.homeGoals = homeGoals
-        match.awayGoals = awayGoals
-        match.penaltyHome = penaltyHome
-        match.penaltyAway = penaltyAway
-        match.winnerId = winnerId
-        match.winnerName = winnerName
-        match.status = 'finished'
+        if (match.twoLegged) {
+          // Two-legged: accumulate per-leg goals
+          if (leg === 1) {
+            match.leg1HomeGoals = homeGoals
+            match.leg1AwayGoals = awayGoals
+            match.leg1Done = true
+            // Not finished yet — wait for leg 2
+            updated.updatedAt = new Date().toISOString()
+            return { updatedBracket: updated, newFixtureEntries: [] }
+          } else {
+            // Leg 2 — teams are swapped in the fixture (awayId plays at home)
+            // So leg2 homeGoals = awayTeam's goals, leg2 awayGoals = homeTeam's goals
+            match.leg2HomeGoals = homeGoals
+            match.leg2AwayGoals = awayGoals
+            match.leg2Done = true
+            // Compute aggregate: homeTeam total vs awayTeam total
+            const homeAggregate = (match.leg1HomeGoals ?? 0) + awayGoals   // leg1 home + leg2 away
+            const awayAggregate = (match.leg1AwayGoals ?? 0) + homeGoals   // leg1 away + leg2 home
+            match.homeGoals = homeAggregate
+            match.awayGoals = awayAggregate
+            match.penaltyHome = penaltyHome
+            match.penaltyAway = penaltyAway
+            match.winnerId = winnerId
+            match.winnerName = winnerName
+            match.status = 'finished'
+          }
+        } else {
+          // Single-leg
+          match.homeGoals = homeGoals
+          match.awayGoals = awayGoals
+          match.penaltyHome = penaltyHome
+          match.penaltyAway = penaltyAway
+          match.winnerId = winnerId
+          match.winnerName = winnerName
+          match.status = 'finished'
+        }
         foundRoundIdx = round.index
         foundSlot = match.slot
         break

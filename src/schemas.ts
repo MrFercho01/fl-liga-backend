@@ -85,8 +85,11 @@ export const createKnockoutSchema = z.object({
 
 export const knockoutResultSchema = z.object({
   knockoutMatchId: z.string().uuid(),
-  winnerId: z.string().uuid(),
-  winnerName: z.string().min(1),
+  /** 1 = ida (primera pierna), 2 = vuelta (segunda pierna). Para partidos de una sola pierna omitir o pasar 1. */
+  leg: z.union([z.literal(1), z.literal(2)]).optional().default(1),
+  /** Requerido solo en pierna única o segunda pierna (vuelta). */
+  winnerId: z.string().uuid().optional(),
+  winnerName: z.string().min(1).optional(),
   homeGoals: z.number().int().min(0),
   awayGoals: z.number().int().min(0),
   penaltyHome: z.number().int().min(0).nullable().optional(),
