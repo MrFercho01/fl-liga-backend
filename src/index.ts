@@ -883,10 +883,12 @@ app.post('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
 app.get('/api/admin/leagues/:leagueId/played-matches', async (req, res) => {
   try {
     const { leagueId } = req.params;
-    const { categoryId } = req.query;
-    const matches = await getAllPlayedMatchesFromMongo();
-    const filtered = matches.filter((m) => m.leagueId === leagueId && (!categoryId || m.categoryId === categoryId));
-    res.json({ data: filtered });
+    const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
+    if (!categoryId) {
+      return res.status(400).json({ message: 'Falta categoryId' });
+    }
+    const matches = await getPlayedMatchesByLeagueAndCategoryFromMongo(leagueId, categoryId);
+    res.json({ data: matches });
   } catch (err) {
     res.status(500).json({ message: 'Error al obtener partidos jugados', error: String(err) });
   }
@@ -945,10 +947,12 @@ app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (req, r
 app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (req, res) => {
   try {
     const { leagueId } = req.params;
-    const { categoryId } = req.query;
-    const schedules = await getAllFixtureSchedulesFromMongo();
-    const filtered = schedules.filter((s) => s.leagueId === leagueId && (!categoryId || s.categoryId === categoryId));
-    res.json({ data: filtered });
+    const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
+    if (!categoryId) {
+      return res.status(400).json({ message: 'Falta categoryId' });
+    }
+    const schedules = await getFixtureSchedulesByLeagueAndCategoryFromMongo(leagueId, categoryId);
+    res.json({ data: schedules });
   } catch (err) {
     res.status(500).json({ message: 'Error al obtener fixture schedule', error: String(err) });
   }
@@ -957,12 +961,15 @@ app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (req, res) => {
 app.get('/api/admin/leagues/:leagueId/fixture', async (req, res) => {
   try {
     const { leagueId } = req.params;
-    const { categoryId } = req.query;
-    // Obtener schedules y equipos desde MongoDB
-    const schedules = await getAllFixtureSchedulesFromMongo();
-    const teams = await getAllTeamsFromMongo();
-    const filteredSchedules = schedules.filter(s => s.leagueId === leagueId && (!categoryId || s.categoryId === categoryId));
-    const filteredTeams = teams.filter(t => t.leagueId === leagueId && (!categoryId || t.categoryId === categoryId));
+    const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
+    if (!categoryId) {
+      return res.status(400).json({ message: 'Falta categoryId' });
+    }
+
+    const [filteredSchedules, filteredTeams] = await Promise.all([
+      getFixtureSchedulesByLeagueAndCategoryFromMongo(leagueId, categoryId),
+      getTeamsByLeagueAndCategoryFromMongo(leagueId, categoryId, true),
+    ]);
 
     // Construir rounds agrupando por round
     const roundsMap = new Map();
@@ -987,7 +994,9 @@ app.get('/api/admin/leagues/:leagueId/fixture', async (req, res) => {
         hasBye: false // No hay campo hasBye, se asume false
       });
     }
-    const rounds = Array.from(roundsMap.entries()).map(([round, matches]) => ({ round, matches }));
+    const rounds = Array.from(roundsMap.entries())
+      .sort((left, right) => Number(left[0]) - Number(right[0]))
+      .map(([round, matches]) => ({ round, matches }));
     const teamsCount = filteredTeams.length;
     const hasBye = false; // No hay campo hasBye, se asume false
     res.json({ data: { teamsCount, hasBye, rounds } });
