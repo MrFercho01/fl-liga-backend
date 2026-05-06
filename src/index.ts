@@ -520,16 +520,16 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
       return res.status(404).json({ message: 'Categoría no encontrada en la liga' });
     }
 
-    // Obtener equipos de la liga/categoría (consulta filtrada)
-    const teams = await getTeamsByLeagueAndCategoryFromMongo(leagueId, categoryId, true);
-
-    // Buscar fixture schedule (consulta filtrada)
-    const schedule = await getFixtureSchedulesByLeagueAndCategoryFromMongo(leagueId, categoryId);
+    const [teams, schedule, playedForLeague, roundAwards] = await Promise.all([
+      getTeamsByLeagueAndCategoryFromMongo(leagueId, categoryId, true),
+      getFixtureSchedulesByLeagueAndCategoryFromMongo(leagueId, categoryId),
+      getPlayedMatchesByLeagueAndCategoryFromMongo(leagueId, categoryId),
+      getRoundAwardsByLeagueAndCategoryFromMongo(leagueId, categoryId),
+    ]);
 
     // Build fixture rounds from saved schedule entries so matchIds stay consistent.
     // Fall back to generating round-robin when there are no schedule entries at all.
     let fixtureRounds: ReturnType<typeof generateFixture>;
-    const playedForLeague = await getPlayedMatchesByLeagueAndCategoryFromMongo(leagueId, categoryId);
     if (schedule.length > 0) {
       // Reconstruct rounds from schedule matchIds (index-based or manual)
       const roundsMap = new Map<number, Array<{ homeTeamId: string; awayTeamId: string | null; hasBye: boolean }>>();
@@ -603,8 +603,6 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
     // Partidos jugados
     const playedMatches = playedForLeague;
     const playedMatchIds = playedMatches.map((match) => match.matchId);
-
-    const roundAwards = await getRoundAwardsByLeagueAndCategoryFromMongo(leagueId, categoryId);
 
     res.json({
       data: {
