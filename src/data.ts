@@ -131,6 +131,22 @@ export const getAllTeamsFromMongo = async (): Promise<RegisteredTeam[]> => {
   return collection.find({}).toArray();
 };
 
+export const getTeamsByLeagueAndCategoryFromMongo = async (
+  leagueId: string,
+  categoryId: string,
+  onlyActive = true,
+): Promise<RegisteredTeam[]> => {
+  const collection = await getTeamsCollection();
+  const query: Record<string, unknown> = {
+    leagueId,
+    categoryId,
+  };
+  if (onlyActive) {
+    query.active = { $ne: false };
+  }
+  return collection.find(query).toArray();
+};
+
 // --- Persistencia granular de fixture/schedule ---
 export const getFixtureScheduleCollection = async () => {
   if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
@@ -149,6 +165,14 @@ export const getAllFixtureSchedulesFromMongo = async (): Promise<FixtureSchedule
   return collection.find({}).toArray();
 };
 
+export const getFixtureSchedulesByLeagueAndCategoryFromMongo = async (
+  leagueId: string,
+  categoryId: string,
+): Promise<FixtureScheduleEntry[]> => {
+  const collection = await getFixtureScheduleCollection();
+  return collection.find({ leagueId, categoryId }).toArray();
+};
+
 // --- Persistencia granular de premios de ronda ---
 export const getRoundAwardsCollection = async () => {
   if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
@@ -165,6 +189,14 @@ export const saveRoundAwardToMongo = async (entry: RoundAwardsEntry) => {
 export const getAllRoundAwardsFromMongo = async (): Promise<RoundAwardsEntry[]> => {
   const collection = await getRoundAwardsCollection();
   return collection.find({}).toArray();
+};
+
+export const getRoundAwardsByLeagueAndCategoryFromMongo = async (
+  leagueId: string,
+  categoryId: string,
+): Promise<RoundAwardsEntry[]> => {
+  const collection = await getRoundAwardsCollection();
+  return collection.find({ leagueId, categoryId }).toArray();
 };
 // --- Persistencia granular: Partidos jugados y videos destacados ---
 export const getPlayedMatchesCollection = async () => {
@@ -188,6 +220,14 @@ export const getAllPlayedMatchesFromMongo = async (): Promise<PlayedMatchRecord[
   return collection.find({}).sort({ playedAt: -1, _id: -1 }).toArray();
 };
 
+export const getPlayedMatchesByLeagueAndCategoryFromMongo = async (
+  leagueId: string,
+  categoryId: string,
+): Promise<PlayedMatchRecord[]> => {
+  const collection = await getPlayedMatchesCollection();
+  return collection.find({ leagueId, categoryId }).sort({ playedAt: -1, _id: -1 }).toArray();
+};
+
 export const getHighlightVideosCollection = async () => {
   if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
   if (!mongoDb) await connectMongo();
@@ -203,6 +243,14 @@ export const saveHighlightVideoToMongo = async (video: MatchHighlightVideo) => {
 export const getAllHighlightVideosFromMongo = async (): Promise<MatchHighlightVideo[]> => {
   const collection = await getHighlightVideosCollection();
   return collection.find({}).toArray();
+};
+
+export const getHighlightVideosByLeagueAndCategoryFromMongo = async (
+  leagueId: string,
+  categoryId: string,
+): Promise<MatchHighlightVideo[]> => {
+  const collection = await getHighlightVideosCollection();
+  return collection.find({ leagueId, categoryId }).toArray();
 };
 
 export const deleteHighlightVideoFromMongo = async (videoId: string) => {
@@ -225,6 +273,14 @@ export const saveLeagueToMongo = async (league: League) => {
 export const getAllLeaguesFromMongo = async (): Promise<League[]> => {
   const collection = await getLeaguesCollection();
   return collection.find({}).toArray();
+};
+
+export const getLeagueByIdAndOwnerFromMongo = async (
+  leagueId: string,
+  ownerUserId: string,
+): Promise<League | null> => {
+  const collection = await getLeaguesCollection();
+  return collection.findOne({ id: leagueId, ownerUserId, active: { $ne: false } });
 };
 // Utilidad para normalizar o validar clientId público (acepta slug o UUID)
 export async function resolvePublicClientId(clientId: string): Promise<string | null> {
@@ -252,6 +308,18 @@ export async function ensurePlayedMatchesIndexes() {
   const collection = mongoDb!.collection('played_matches');
   // Índice para búsquedas rápidas por estado y matchId
   await collection.createIndex({ status: 1, matchId: 1 });
+}
+
+export async function ensureCoreReadIndexes() {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+
+  await mongoDb!.collection('leagues').createIndex({ ownerUserId: 1, active: 1 });
+  await mongoDb!.collection('teams').createIndex({ leagueId: 1, categoryId: 1, active: 1 });
+  await mongoDb!.collection('fixture_schedule').createIndex({ leagueId: 1, categoryId: 1, round: 1 });
+  await mongoDb!.collection('played_matches').createIndex({ leagueId: 1, categoryId: 1, playedAt: -1 });
+  await mongoDb!.collection('round_awards').createIndex({ leagueId: 1, categoryId: 1, round: 1 });
+  await mongoDb!.collection('highlight_videos').createIndex({ leagueId: 1, categoryId: 1 });
 }
 
 export interface RuleSet {

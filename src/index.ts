@@ -16,8 +16,10 @@ import { getTeamsCollection, connectMongo, getLeaguesCollection } from './data';
 import { transcodeVideoIfPossible } from './utils';
 import {
   getAllPlayedMatchesFromMongo,
+  getPlayedMatchesByLeagueAndCategoryFromMongo,
   savePlayedMatchToMongo,
   saveHighlightVideoToMongo,
+  getHighlightVideosByLeagueAndCategoryFromMongo,
   deleteHighlightVideoFromMongo,
   getVideosBucket,
   getMongoObjectId,
@@ -53,19 +55,24 @@ import {
   getClientAccessTokenByToken,
   revokeClientAccessTokenInMongo,
   getAllTeamsFromMongo,
+  getTeamsByLeagueAndCategoryFromMongo,
   saveTeamToMongo,
   getAllFixtureSchedulesFromMongo,
+  getFixtureSchedulesByLeagueAndCategoryFromMongo,
   getFixtureScheduleCollection,
   saveFixtureScheduleToMongo,
   getAllRoundAwardsFromMongo,
+  getRoundAwardsByLeagueAndCategoryFromMongo,
   saveRoundAwardToMongo,
   getMatchEngagement,
   saveMatchEngagement,
   getLeagueFixture,
+  getLeagueByIdAndOwnerFromMongo,
   getLeaguesByClientId,
   getClientEngagement,
   saveClientEngagement,
   getAllUsersFromMongo,
+  ensureCoreReadIndexes,
 } from './data';
 // ENDPOINTS AVANZADOS COMENTADOS PARA COMPILACIÓN LIMPIA
 import { buildTeamNameAliases, resolveTeamFromAliasMap } from './team-alias';
@@ -432,9 +439,18 @@ async function resolvePublicClientIdStrict(clientId: string): Promise<{ resolved
 
   const normalizedClientId = normalizePublicClientValue(rawClientId);
   const usersCollection = await getUsersCollection();
-  const allUsers = await usersCollection.find({ role: 'client_admin', active: true }).toArray();
+  const directUser = await usersCollection.findOne({
+    role: 'client_admin',
+    active: true,
+    $or: [
+      { id: rawClientId },
+      { publicPortalPath: rawClientId },
+      { publicPortalPath: `/cliente/${rawClientId}` },
+      { slug: rawClientId } as Record<string, unknown>,
+    ],
+  });
 
-  const user = allUsers.find((u) => {
+  const user = directUser ?? (await usersCollection.find({ role: 'client_admin', active: true }).toArray()).find((u) => {
     const publicPath = typeof u.publicPortalPath === 'string' ? u.publicPortalPath : '';
     const pathSlug = publicPath.replace(/^\/cliente\//, '').trim();
     const legacySlugValue = (u as Record<string, unknown>)['slug'];
@@ -492,9 +508,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
     const resolvedClientId = resolvedClient.resolvedClientId;
     console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
-    // Buscar liga y categoría
-    const allLeagues = await getAllLeaguesFromMongo();
-    const league = allLeagues.find(l => l.id === leagueId && l.ownerUserId === resolvedClientId && l.active);
+    // Buscar liga y categoría (consulta filtrada)
+    const league = await getLeagueByIdAndOwnerFromMongo(leagueId, resolvedClientId);
     if (!league) {
       console.warn(`[API] Liga no encontrada o no pertenece al cliente: ${leagueId}`);
       return res.status(404).json({ message: 'Liga no encontrada' });
@@ -505,18 +520,16 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
       return res.status(404).json({ message: 'Categoría no encontrada en la liga' });
     }
 
-    // Obtener equipos de la liga/categoría
-    const allTeams = await getAllTeamsFromMongo();
-    const teams = allTeams.filter((team) => team.leagueId === leagueId && team.categoryId === categoryId && isTeamActive(team));
+    // Obtener equipos de la liga/categoría (consulta filtrada)
+    const teams = await getTeamsByLeagueAndCategoryFromMongo(leagueId, categoryId, true);
 
-    // Buscar fixture schedule
-    const allSchedules = await getAllFixtureSchedulesFromMongo();
-    const schedule = allSchedules.filter((entry) => entry.leagueId === leagueId && entry.categoryId === categoryId);
+    // Buscar fixture schedule (consulta filtrada)
+    const schedule = await getFixtureSchedulesByLeagueAndCategoryFromMongo(leagueId, categoryId);
 
     // Build fixture rounds from saved schedule entries so matchIds stay consistent.
     // Fall back to generating round-robin when there are no schedule entries at all.
     let fixtureRounds: ReturnType<typeof generateFixture>;
-    const allPlayedRaw = await getAllPlayedMatchesFromMongo();
+    const playedForLeague = await getPlayedMatchesByLeagueAndCategoryFromMongo(leagueId, categoryId);
     if (schedule.length > 0) {
       // Reconstruct rounds from schedule matchIds (index-based or manual)
       const roundsMap = new Map<number, Array<{ homeTeamId: string; awayTeamId: string | null; hasBye: boolean }>>();
@@ -550,7 +563,6 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
       }
 
       // Also add played matches that may not be in schedule anymore
-      const playedForLeague = allPlayedRaw.filter((m) => m.leagueId === leagueId && m.categoryId === categoryId);
       for (const pm of playedForLeague) {
         const matchId = pm.matchId;
         let homeTeamId: string | null = null;
@@ -589,11 +601,10 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
     };
 
     // Partidos jugados
-    const playedMatches = allPlayedRaw.filter((match) => match.leagueId === leagueId && match.categoryId === categoryId);
+    const playedMatches = playedForLeague;
     const playedMatchIds = playedMatches.map((match) => match.matchId);
 
-    const allAwards = await getAllRoundAwardsFromMongo();
-    const roundAwards = allAwards.filter((award) => award.leagueId === leagueId && award.categoryId === categoryId);
+    const roundAwards = await getRoundAwardsByLeagueAndCategoryFromMongo(leagueId, categoryId);
 
     res.json({
       data: {
@@ -628,7 +639,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/fixture', async (req, re
 app.get('/api/public/client/:clientId/leagues/:leagueId/played-matches', async (req, res) => {
   try {
     const { clientId, leagueId } = req.params;
-    const { categoryId } = req.query;
+    const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
     if (!categoryId) {
       console.warn(`[API] Faltante categoryId en partidos jugados públicos`);
       return res.json({ data: [], message: 'Falta categoryId' });
@@ -642,9 +653,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/played-matches', async (
     const resolvedClientId = resolvedClient.resolvedClientId;
     console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
-    // Buscar liga y categoría
-    const allLeagues = await getAllLeaguesFromMongo();
-    const league = allLeagues.find(l => l.id === leagueId && l.ownerUserId === resolvedClientId && l.active);
+    // Buscar liga y categoría (consulta filtrada)
+    const league = await getLeagueByIdAndOwnerFromMongo(leagueId, resolvedClientId);
     if (!league) {
       console.warn(`[API] Liga no encontrada o no pertenece al cliente: ${leagueId}`);
       return res.json({ data: [], message: 'Liga no encontrada' });
@@ -655,9 +665,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/played-matches', async (
       return res.json({ data: [], message: 'Categoría no encontrada en la liga' });
     }
 
-    // Buscar partidos jugados
-    const allMatches = await getAllPlayedMatchesFromMongo();
-    const matches = allMatches.filter(m => m.leagueId === leagueId && m.categoryId === categoryId);
+    // Buscar partidos jugados (consulta filtrada)
+    const matches = await getPlayedMatchesByLeagueAndCategoryFromMongo(leagueId, categoryId);
     console.log(`[API] Partidos jugados públicos: cliente ${resolvedClientId}, liga ${leagueId}, categoría ${categoryId}, partidos ${matches.length}`);
     res.json({ data: matches });
   } catch (err) {
@@ -669,7 +678,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/played-matches', async (
 app.get('/api/public/client/:clientId/leagues/:leagueId/highlight-videos', async (req, res) => {
   try {
     const { clientId, leagueId } = req.params;
-    const { categoryId } = req.query;
+    const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
     if (!categoryId) {
       console.warn(`[API] Faltante categoryId en videos públicos`);
       return res.json({ data: [], message: 'Falta categoryId' });
@@ -683,9 +692,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/highlight-videos', async
     const resolvedClientId = resolvedClient.resolvedClientId;
     console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
-    // Buscar liga y categoría
-    const allLeagues = await getAllLeaguesFromMongo();
-    const league = allLeagues.find(l => l.id === leagueId && l.ownerUserId === resolvedClientId && l.active);
+    // Buscar liga y categoría (consulta filtrada)
+    const league = await getLeagueByIdAndOwnerFromMongo(leagueId, resolvedClientId);
     if (!league) {
       console.warn(`[API] Liga no encontrada o no pertenece al cliente: ${leagueId}`);
       return res.json({ data: [], message: 'Liga no encontrada' });
@@ -696,10 +704,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/highlight-videos', async
       return res.json({ data: [], message: 'Categoría no encontrada en la liga' });
     }
 
-    // Buscar videos destacados
-    const allVideos = await getAllHighlightVideosFromMongo();
-    // Algunos videos pueden no tener categoryId, filtrar solo por leagueId
-    const videos = allVideos.filter(v => v.leagueId === leagueId && (!('categoryId' in v) || v.categoryId === categoryId));
+    // Buscar videos destacados (consulta filtrada)
+    const videos = await getHighlightVideosByLeagueAndCategoryFromMongo(leagueId, categoryId);
     console.log(`[API] Videos públicos: cliente ${resolvedClientId}, liga ${leagueId}, categoría ${categoryId}, videos ${videos.length}`);
     res.json({ data: videos });
   } catch (err) {
@@ -711,7 +717,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/highlight-videos', async
 app.get('/api/public/client/:clientId/leagues/:leagueId/teams', async (req, res) => {
   try {
     const { clientId, leagueId } = req.params;
-    const { categoryId } = req.query;
+    const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
     if (!categoryId) {
       console.warn(`[API] Faltante categoryId en equipos públicos`);
       return res.json({ data: [], message: 'Falta categoryId' });
@@ -725,9 +731,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/teams', async (req, res)
     const resolvedClientId = resolvedClient.resolvedClientId;
     console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
 
-    // Buscar liga y categoría
-    const allLeagues = await getAllLeaguesFromMongo();
-    const league = allLeagues.find(l => l.id === leagueId && l.ownerUserId === resolvedClientId && l.active);
+    // Buscar liga y categoría (consulta filtrada)
+    const league = await getLeagueByIdAndOwnerFromMongo(leagueId, resolvedClientId);
     if (!league) {
       console.warn(`[API] Liga no encontrada o no pertenece al cliente: ${leagueId}`);
       return res.json({ data: [], message: 'Liga no encontrada' });
@@ -738,9 +743,8 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/teams', async (req, res)
       return res.json({ data: [], message: 'Categoría no encontrada en la liga' });
     }
 
-    // Buscar equipos
-    const allTeams = await getAllTeamsFromMongo();
-    const teams = allTeams.filter(t => t.leagueId === leagueId && t.categoryId === categoryId);
+    // Buscar equipos (consulta filtrada)
+    const teams = await getTeamsByLeagueAndCategoryFromMongo(leagueId, categoryId, true);
     console.log(`[API] Equipos públicos: cliente ${resolvedClientId}, liga ${leagueId}, categoría ${categoryId}, equipos ${teams.length}`);
     res.json({ data: teams });
   } catch (err) {
@@ -1169,8 +1173,7 @@ app.get('/api/public/client/:clientId/leagues', async (req, res) => {
     }
     const resolvedClientId = resolvedClient.resolvedClientId;
     console.log(`[API] Cliente encontrado: ${resolvedClient.organizationName ?? resolvedClientId} (${resolvedClientId})`);
-    const allLeagues = await getAllLeaguesFromMongo();
-    const leagues = allLeagues.filter(l => l.ownerUserId === resolvedClientId && l.active);
+    const leagues = (await getLeaguesByClientId(resolvedClientId)).filter((league) => league.active !== false);
     console.log(`[API] Ligas encontradas para cliente ${resolvedClientId}: ${leagues.length}`);
     res.json({ data: leagues });
   } catch (err) {
@@ -1528,6 +1531,8 @@ async function migratePlayedMatchesLineups(): Promise<number> {
   try {
     await ensurePlayedMatchesIndexes();
     console.log('Índice { status: 1, matchId: 1 } en played_matches inicializado correctamente.');
+    await ensureCoreReadIndexes();
+    console.log('Índices de lectura por liga/categoría inicializados correctamente.');
   } catch (err) {
     console.error('Error al inicializar índice en played_matches:', err);
   }
