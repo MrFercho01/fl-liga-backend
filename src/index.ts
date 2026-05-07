@@ -1938,6 +1938,13 @@ export const updateLeagueSchema = z.object({
     })
   ).optional(),
   active: z.boolean().optional(),
+  socialLinks: z.object({
+    instagram: z.string().url().optional().or(z.literal('')),
+    facebook: z.string().url().optional().or(z.literal('')),
+    tiktok: z.string().url().optional().or(z.literal('')),
+    youtube: z.string().url().optional().or(z.literal('')),
+    x: z.string().url().optional().or(z.literal('')),
+  }).optional(),
 });
 
 // ENDPOINTS FUNCIONALES PARA EL FRONTEND
@@ -2920,6 +2927,7 @@ app.patch('/api/admin/leagues/:leagueId', async (request, response) => {
     themeColor: (payload.themeColor !== undefined ? payload.themeColor : currentLeague.themeColor) || '',
     backgroundImageUrl: (payload.backgroundImageUrl !== undefined ? payload.backgroundImageUrl : currentLeague.backgroundImageUrl) || '',
     slogan: (payload.slogan !== undefined ? payload.slogan : currentLeague.slogan) || '',
+    socialLinks: payload.socialLinks !== undefined ? payload.socialLinks : (currentLeague as any).socialLinks,
   };
   await saveLeagueToMongo(nextLeague);
   response.json({ data: nextLeague });
@@ -3554,6 +3562,13 @@ const createLeagueSchema = z.object({
   active: z.boolean().default(true),
   logoUrl: z.string().trim().min(1).optional(),
   categories: z.array(categorySchema).min(1),
+  socialLinks: z.object({
+    instagram: z.string().url().optional().or(z.literal('')),
+    facebook: z.string().url().optional().or(z.literal('')),
+    tiktok: z.string().url().optional().or(z.literal('')),
+    youtube: z.string().url().optional().or(z.literal('')),
+    x: z.string().url().optional().or(z.literal('')),
+  }).optional(),
 })
 
 app.post('/api/admin/leagues', async (request, response) => {
@@ -3589,7 +3604,8 @@ app.post('/api/admin/leagues', async (request, response) => {
     active: typeof parsed.data.active === 'boolean' ? parsed.data.active : true,
     ownerUserId: user.role === 'super_admin' ? SUPER_ADMIN_USER_ID : user.id,
     ...(parsed.data.logoUrl ? { logoUrl: parsed.data.logoUrl } : {}),
-    categories: parsed.data.categories.map((category) => ({
+    ...(parsed.data.socialLinks ? { socialLinks: parsed.data.socialLinks } : {}),
+    categories: parsed.data.categories.map((category: any) => ({
       id: uuidv4(),
       name: category.name,
       minAge: category.minAge ?? 0,
