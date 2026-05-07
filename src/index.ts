@@ -201,13 +201,13 @@ app.patch('/api/admin/leagues/:leagueId/categories/:categoryId/rules', async (re
       res.status(400).json({ ok: false, message: 'Faltan reglas a actualizar' });
       return;
     }
-    // Timeout de 5 segundos para evitar espera infinita
+    // Timeout de 25 segundos para tolerar latencia de Render/MongoDB
     timeoutHandle = setTimeout(() => {
       if (!responded) {
         responded = true;
         res.status(504).json({ ok: false, message: 'La transacción demoró demasiado y no se pudo completar. Intenta de nuevo.' });
       }
-    }, 5000);
+    }, 25000);
 
     const leaguesCollection = await getLeaguesCollection();
     // Actualiza solo el objeto rules de la categoría seleccionada
