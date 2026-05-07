@@ -3422,7 +3422,16 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
     await saveHighlightVideoToMongo(video)
     response.json({ data: nextMatch })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    let msg = 'Error desconocido'
+    if (err instanceof Error) {
+      msg = err.message
+    } else if (typeof err === 'string') {
+      msg = err
+    } else if (err != null && typeof (err as Record<string, unknown>).message === 'string') {
+      msg = (err as Record<string, unknown>).message as string
+    } else {
+      try { msg = JSON.stringify(err) } catch { msg = 'Error no serializable' }
+    }
     console.error('[video upload] Error subiendo a Cloudinary:', msg)
     response.status(500).json({ message: `No se pudo subir el video: ${msg}` })
   }
