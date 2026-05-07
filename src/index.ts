@@ -3240,11 +3240,26 @@ const uploadVideoToCloudinary = async (payload: {
   mimetype: string
   publicId: string
 }): Promise<{ secureUrl: string; publicId: string }> => {
-  const result = await new Promise<{
-    secure_url: string
-    public_id: string
-  }>((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (err: Error | null, result?: { secureUrl: string; publicId: string }) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      if (err) {
+        console.error('[cloudinary] upload error:', err.message)
+        reject(err)
+      } else {
+        resolve(result!)
+      }
+    }
+
+    // Timeout de 120 s: si Cloudinary no responde, la Promise se rechaza
+    const timeoutId = setTimeout(() => {
+      settle(new Error('Timeout: Cloudinary no respondió en 120 segundos'))
+    }, 120_000)
+
+    const uploadStream = cloudinary.uploader.upload_stream(
       {
         resource_type: 'video',
         public_id: payload.publicId,
@@ -3253,25 +3268,29 @@ const uploadVideoToCloudinary = async (payload: {
       },
       (error, uploadResult) => {
         if (error) {
-          reject(error)
+          settle(error instanceof Error ? error : new Error(String(error)))
           return
         }
         if (!uploadResult?.secure_url || !uploadResult?.public_id) {
-          reject(new Error('Cloudinary no devolvió URL/Public ID del video'))
+          settle(new Error('Cloudinary no devolvió URL/Public ID del video'))
           return
         }
-        resolve({
-          secure_url: uploadResult.secure_url,
-          public_id: uploadResult.public_id,
-        })
+        settle(null, { secureUrl: uploadResult.secure_url, publicId: uploadResult.public_id })
       },
     )
+
+    uploadStream.on('error', (err: unknown) => {
+      settle(err instanceof Error ? err : new Error(String(err)))
+    })
+
     // Readable.from(Buffer) itera por bytes (números) y puede corromper el binario.
     // Enviamos el Buffer como un único chunk.
-    Readable.from([payload.buffer]).pipe(stream).on('error', reject)
+    const src = Readable.from([payload.buffer])
+    src.on('error', (err: unknown) => {
+      settle(err instanceof Error ? err : new Error(String(err)))
+    })
+    src.pipe(uploadStream)
   })
-
-  return { secureUrl: result.secure_url, publicId: result.public_id }
 }
 
 const buildPublicVideoUrl = (request: express.Request, videoId: string) => {
@@ -3402,8 +3421,10 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
     await savePlayedMatchToMongo(nextMatch)
     await saveHighlightVideoToMongo(video)
     response.json({ data: nextMatch })
-  } catch {
-    response.status(500).json({ message: 'No se pudo procesar/cargar el video' })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[video upload] Error subiendo a Cloudinary:', msg)
+    response.status(500).json({ message: `No se pudo subir el video: ${msg}` })
   }
 })
 
