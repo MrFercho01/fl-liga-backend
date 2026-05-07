@@ -2589,8 +2589,7 @@ app.get('/api/admin/leagues/:leagueId/fixture', async (request, response) => {
   const user = await requireAuth(request, response)
   if (!user) return
 
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+    const league = await getLeagueByIdFromMongo(request.params.leagueId)
   if (!league) {
     response.status(404).json({ message: 'Liga no encontrada' })
     return
@@ -2677,8 +2676,7 @@ app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (request, respons
   const user = await requireAuth(request, response)
   if (!user) return
 
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+    const league = await getLeagueByIdFromMongo(request.params.leagueId)
   if (!league) {
     response.status(404).json({ message: 'Liga no encontrada' })
     return
@@ -2717,8 +2715,7 @@ app.post('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (reques
   const user = await requireAuth(request, response)
   if (!user) return
 
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+    const league = await getLeagueByIdFromMongo(request.params.leagueId)
   if (!league) {
     response.status(404).json({ message: 'Liga no encontrada' })
     return
@@ -2758,8 +2755,7 @@ app.delete('/api/admin/leagues/:leagueId/matches/:matchId/schedule', async (requ
   const user = await requireAuth(request, response)
   if (!user) return
 
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+    const league = await getLeagueByIdFromMongo(request.params.leagueId)
   if (!league) {
     response.status(404).json({ message: 'Liga no encontrada' })
     return

@@ -380,6 +380,7 @@ export async function ensureCoreReadIndexes() {
 
   await mongoDb!.collection('leagues').createIndex({ active: 1 });
   await mongoDb!.collection('leagues').createIndex({ ownerUserId: 1, active: 1 });
+    await mongoDb!.collection('leagues').createIndex({ id: 1 }, { unique: true, sparse: true });
   await mongoDb!.collection('teams').createIndex({ leagueId: 1, categoryId: 1, active: 1 });
   try {
     await mongoDb!.collection('fixture_schedule').createIndex(
