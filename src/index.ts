@@ -16,6 +16,9 @@ import { getTeamsCollection, connectMongo, getLeaguesCollection } from './data';
 import { transcodeVideoIfPossible } from './utils';
 import {
   getAllPlayedMatchesFromMongo,
+  getPlayedMatchesByLeagueFromMongo,
+  getPlayedMatchByLeagueCategoryAndMatchIdFromMongo,
+  getLivePlayedMatchesFromMongo,
   getPlayedMatchesByLeagueAndCategoryFromMongo,
   savePlayedMatchToMongo,
   saveHighlightVideoToMongo,
@@ -50,6 +53,9 @@ import { requireAuth } from './requireAuth';
 import { createCategorySchema, updateCategorySchema, createKnockoutSchema, knockoutResultSchema } from './schemas';
 import {
   getAllLeaguesFromMongo,
+  getActiveLeaguesFromMongo,
+  getLeaguesByOwnerAndActiveFromMongo,
+  getLeagueByIdFromMongo,
   saveLeagueToMongo,
   getAllClientAccessTokensFromMongo,
   saveClientAccessTokenToMongo,
@@ -65,6 +71,7 @@ import {
   getFixtureScheduleCollection,
   saveFixtureScheduleToMongo,
   getAllRoundAwardsFromMongo,
+  getRoundAwardsByLeagueFromMongo,
   getRoundAwardsByLeagueAndCategoryFromMongo,
   saveRoundAwardToMongo,
   getMatchEngagement,
@@ -501,9 +508,9 @@ app.get('/api/leagues', async (req, res) => {
     const user = await requireAuth(req, res);
     let leagues;
     if (user.role === 'super_admin' || user.id === SUPER_ADMIN_USER_ID) {
-      leagues = (await getAllLeaguesFromMongo()).filter((league) => league.active !== false);
+      leagues = await getActiveLeaguesFromMongo();
     } else {
-      leagues = (await getAllLeaguesFromMongo()).filter((league) => league.ownerUserId === user.id && league.active !== false);
+      leagues = await getLeaguesByOwnerAndActiveFromMongo(user.id);
     }
     res.json({ data: leagues });
   } catch (err) {
@@ -536,9 +543,10 @@ app.get('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
   const { leagueId } = req.params;
   const { categoryId } = req.query;
   try {
-    const all = await getAllRoundAwardsFromMongo();
-    const filtered = all.filter(r => r.leagueId === leagueId && (!categoryId || r.categoryId === categoryId));
-    res.json({ ok: true, data: filtered });
+    const data = typeof categoryId === 'string' && categoryId
+      ? await getRoundAwardsByLeagueAndCategoryFromMongo(leagueId, categoryId)
+      : await getRoundAwardsByLeagueFromMongo(leagueId)
+    res.json({ ok: true, data });
   } catch (e) {
     res.status(500).json({ ok: false, message: 'Error cargando mejores jugadoras por fecha' });
   }
@@ -562,8 +570,9 @@ app.get('/api/admin/leagues/:leagueId/round-awards-ranking', async (req, res) =>
   const { leagueId } = req.params;
   const { categoryId } = req.query;
   try {
-    const all = await getAllRoundAwardsFromMongo();
-    const filtered = all.filter(r => r.leagueId === leagueId && (!categoryId || r.categoryId === categoryId));
+    const filtered = typeof categoryId === 'string' && categoryId
+      ? await getRoundAwardsByLeagueAndCategoryFromMongo(leagueId, categoryId)
+      : await getRoundAwardsByLeagueFromMongo(leagueId)
     // Agrupar votos por jugadora
     const rankingMap = new Map();
     filtered.forEach(entry => {
@@ -594,9 +603,10 @@ app.get('/api/_legacy/admin/leagues/:leagueId/played-matches', async (req, res) 
   const { leagueId } = req.params;
   const { categoryId } = req.query;
   try {
-    const all = await getAllPlayedMatchesFromMongo();
-    const filtered = all.filter(m => m.leagueId === leagueId && (!categoryId || m.categoryId === categoryId));
-    res.json({ ok: true, data: filtered });
+    const data = typeof categoryId === 'string' && categoryId
+      ? await getPlayedMatchesByLeagueAndCategoryFromMongo(leagueId, categoryId)
+      : await getPlayedMatchesByLeagueFromMongo(leagueId)
+    res.json({ ok: true, data });
   } catch (e) {
     res.status(500).json({ ok: false, message: 'Error cargando partidos jugados' });
   }
@@ -636,16 +646,16 @@ app.get('/api/admin/client-access-tokens/:tokenId', async (req, res) => {
 // Endpoint: Ranking acumulado de jugadora de la fecha por liga y categoría
 app.get('/api/admin/leagues/:leagueId/round-awards-ranking', requireSuperAdmin, async (req, res) => {
   try {
-    const { leagueId } = req.params;
-    const { categoryId } = req.query;
-    if (!categoryId || typeof categoryId !== 'string') {
+    const leagueId = String(req.params.leagueId ?? '');
+    if (!leagueId) {
+      return res.status(400).json({ message: 'Falta leagueId' });
+    }
+    const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : '';
+    if (!categoryId) {
       return res.status(400).json({ message: 'Falta categoryId' });
     }
 
-    const allAwards = await getAllRoundAwardsFromMongo();
-    const filtered = allAwards.filter(
-      (a) => a.leagueId === leagueId && a.categoryId === categoryId
-    );
+    const filtered = await getRoundAwardsByLeagueAndCategoryFromMongo(leagueId, String(categoryId));
 
     // Acumular votos por jugadora
     const votesMap = new Map();
@@ -1058,7 +1068,7 @@ app.get('/api/public/client/:clientId/leagues/:leagueId/engagement', async (req,
 // Obtener partido en vivo real desde MongoDB (multi-partido)
 app.get('/api/live/match', async (req, res) => {
   try {
-    const matches = await getAllPlayedMatchesFromMongo();
+    const matches = await getLivePlayedMatchesFromMongo();
     const liveMatches = matches
       .filter(m => m.status === 'live' && m.homeTeamName && m.awayTeamName)
       .map(m => ({
@@ -1173,9 +1183,8 @@ app.post('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
 app.get('/api/admin/leagues/:leagueId/round-awards', async (req, res) => {
   try {
     const { leagueId } = req.params;
-    const awards = await getAllRoundAwardsFromMongo();
-    const filtered = awards.filter((a) => a.leagueId === leagueId);
-    res.json({ data: filtered });
+    const data = await getRoundAwardsByLeagueFromMongo(leagueId);
+    res.json({ data });
   } catch (err) {
     res.status(500).json({ message: 'Error al obtener premios de ronda', error: String(err) });
   }
@@ -2001,7 +2010,7 @@ app.post('/api/auth/login', async (req, res) => {
       if (user.role === 'client_admin') {
         leagues = (await getLeaguesByClientId(user.id)).filter((league) => league.active !== false);
       } else {
-        leagues = (await getAllLeaguesFromMongo()).filter((league) => league.active !== false);
+        leagues = await getActiveLeaguesFromMongo();
       }
       // Mapear ownerUserId a organizationName
       const userMap = new Map(users.map(u => [u.id, u.organizationName || u.name || '']));
@@ -2778,8 +2787,7 @@ app.get('/api/admin/leagues/:leagueId/round-awards', async (request, response) =
   const user = await requireAuth(request, response)
   if (!user) return
 
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+  const league = await getLeagueByIdFromMongo(request.params.leagueId)
   if (!league) {
     response.status(404).json({ message: 'Liga no encontrada' })
     return
@@ -2793,10 +2801,11 @@ app.get('/api/admin/leagues/:leagueId/round-awards', async (request, response) =
   const categoryId = typeof request.query.categoryId === 'string' ? request.query.categoryId : ''
   const round = typeof request.query.round === 'string' ? Number(request.query.round) : 0
 
-  const allAwards = await getAllRoundAwardsFromMongo();
-  const data = allAwards.filter((item) => {
-    if (item.leagueId !== league.id) return false
-    if (categoryId && item.categoryId !== categoryId) return false
+  const baseAwards = categoryId
+    ? await getRoundAwardsByLeagueAndCategoryFromMongo(league.id, categoryId)
+    : await getRoundAwardsByLeagueFromMongo(league.id)
+
+  const data = baseAwards.filter((item) => {
     if (round > 0 && item.round !== round) return false
     return true
   })
@@ -3214,8 +3223,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', async (r
   const user = await requireAuth(request, response)
   if (!user) return
 
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+  const league = await getLeagueByIdFromMongo(request.params.leagueId)
   if (!league) {
     response.status(404).json({ message: 'Liga no encontrada' })
     return
@@ -3231,10 +3239,11 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos', async (r
   }
 
   // Buscar partido en MongoDB
-  const allMatches = await getAllPlayedMatchesFromMongo();
-  const match = [...allMatches].find(
-    (item) => item.leagueId === league.id && item.categoryId === parsed.data.categoryId && item.matchId === request.params.matchId,
-  );
+  const match = await getPlayedMatchByLeagueCategoryAndMatchIdFromMongo(
+    league.id,
+    parsed.data.categoryId,
+    request.params.matchId,
+  )
   if (!match) {
     response.status(404).json({ message: 'Partido jugado no encontrado' })
     return
@@ -3261,8 +3270,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
   const user = await requireAuth(request, response)
   if (!user) return
 
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+  const league = await getLeagueByIdFromMongo(request.params.leagueId)
   if (!league) {
     response.status(404).json({ message: 'Liga no encontrada' })
     return
@@ -3285,9 +3293,10 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
     response.status(400).json({ message: 'El archivo debe ser un video válido' })
     return
   }
-  const allMatches = await getAllPlayedMatchesFromMongo();
-  const match = [...allMatches].find(
-    (item) => item.leagueId === league.id && item.categoryId === parsed.data.categoryId && item.matchId === request.params.matchId,
+  const match = await getPlayedMatchByLeagueCategoryAndMatchIdFromMongo(
+    league.id,
+    parsed.data.categoryId,
+    request.params.matchId,
   )
   if (!match) {
     response.status(404).json({ message: 'Partido jugado no encontrado' })
@@ -3350,8 +3359,7 @@ app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId
   const user = await requireAuth(request, response)
   if (!user) return
 
-  const allLeagues = await getAllLeaguesFromMongo();
-  const league = allLeagues.find((item) => item.id === request.params.leagueId)
+  const league = await getLeagueByIdFromMongo(request.params.leagueId)
   if (!league) {
     response.status(404).json({ message: 'Liga no encontrada' })
     return
@@ -3361,9 +3369,10 @@ app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId
     return
   }
   const categoryId = String(request.query.categoryId ?? '')
-  const allMatches = await getAllPlayedMatchesFromMongo();
-  const match = [...allMatches].find(
-    (item) => item.leagueId === league.id && item.categoryId === categoryId && item.matchId === request.params.matchId,
+  const match = await getPlayedMatchByLeagueCategoryAndMatchIdFromMongo(
+    league.id,
+    categoryId,
+    request.params.matchId,
   )
   if (!match) {
     response.status(404).json({ message: 'Partido jugado no encontrado' })
