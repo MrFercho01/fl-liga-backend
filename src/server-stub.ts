@@ -5,6 +5,10 @@ import express from 'express';
 
 // Instancia única de Express para toda la app
 const app = express();
+// Necesario en Render/Railway/etc: el TLS termina en el proxy, Express recibe http.
+// Sin esto, request.protocol devuelve 'http' y las URLs de video quedan como http://
+// causando bloqueo de mixed content en el browser.
+app.set('trust proxy', 1);
 export { app };
 
 export const port = Number(process.env.PORT) || 3000;
