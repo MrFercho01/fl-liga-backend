@@ -555,6 +555,7 @@ export interface MatchHighlightVideo {
   id: string
   name: string
   url: string
+  cloudinaryPublicId?: string
   leagueId: string
   categoryId?: string
   matchId?: string

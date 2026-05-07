@@ -33,6 +33,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Collection, MongoClient } from 'mongodb';
 import { Readable } from 'stream';
 import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary'
 import { generateFixture } from './fixture';
 import {
   syncTeamInAllMatches,
@@ -3208,6 +3209,71 @@ const uploadVideoSchema = z.object({
   name: z.string().trim().min(1).optional(),
 })
 
+const cloudinaryCloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim()
+const cloudinaryApiKey = process.env.CLOUDINARY_API_KEY?.trim()
+const cloudinaryApiSecret = process.env.CLOUDINARY_API_SECRET?.trim()
+const isCloudinaryConfigured = Boolean(cloudinaryCloudName && cloudinaryApiKey && cloudinaryApiSecret)
+
+if (isCloudinaryConfigured) {
+  const configuredCloudName = cloudinaryCloudName!
+  const configuredApiKey = cloudinaryApiKey!
+  const configuredApiSecret = cloudinaryApiSecret!
+  cloudinary.config({
+    cloud_name: configuredCloudName,
+    api_key: configuredApiKey,
+    api_secret: configuredApiSecret,
+    secure: true,
+  })
+} else {
+  console.warn('[videos] Cloudinary no configurado. Define CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY y CLOUDINARY_API_SECRET.')
+}
+
+const sanitizePathPart = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '_')
+
+const buildCloudinaryPublicId = (leagueId: string, categoryId: string, matchId: string) => {
+  const suffix = uuidv4().replace(/-/g, '')
+  return `fl-liga/highlights/${sanitizePathPart(leagueId)}/${sanitizePathPart(categoryId)}/${sanitizePathPart(matchId)}-${suffix}`
+}
+
+const uploadVideoToCloudinary = async (payload: {
+  buffer: Buffer
+  mimetype: string
+  publicId: string
+}): Promise<{ secureUrl: string; publicId: string }> => {
+  const result = await new Promise<{
+    secure_url: string
+    public_id: string
+  }>((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        resource_type: 'video',
+        public_id: payload.publicId,
+        overwrite: false,
+        invalidate: true,
+      },
+      (error, uploadResult) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        if (!uploadResult?.secure_url || !uploadResult?.public_id) {
+          reject(new Error('Cloudinary no devolvió URL/Public ID del video'))
+          return
+        }
+        resolve({
+          secure_url: uploadResult.secure_url,
+          public_id: uploadResult.public_id,
+        })
+      },
+    )
+    // Readable.from(Buffer) itera por bytes (números) y puede corromper el binario.
+    // Enviamos el Buffer como un único chunk.
+    Readable.from([payload.buffer]).pipe(stream).on('error', reject)
+  })
+
+  return { secureUrl: result.secure_url, publicId: result.public_id }
+}
+
 const buildPublicVideoUrl = (request: express.Request, videoId: string) => {
   const configured = process.env.PUBLIC_API_BASE_URL?.trim()
   if (configured) {
@@ -3300,10 +3366,9 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
     response.status(404).json({ message: 'Partido jugado no encontrado' })
     return
   }
-  const bucket = await getVideosBucket()
-  if (!bucket) {
+  if (!isCloudinaryConfigured) {
     response.status(503).json({
-      message: 'Upload de videos requiere MongoDB activo. Configura MONGODB_URI en backend.',
+      message: 'Upload de videos requiere Cloudinary activo. Configura CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY y CLOUDINARY_API_SECRET en backend.',
     })
     return
   }
@@ -3314,32 +3379,17 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
       mimetype: file.mimetype,
     })
     const finalName = optimizedVideo.transcoded
-    const uploadStream = bucket.openUploadStream(finalName, {
-      metadata: {
-        contentType: optimizedVideo.mimetype,
-        leagueId: league.id,
-        categoryId: parsed.data.categoryId,
-        matchId: match.matchId,
-        uploadedBy: user.id,
-      },
+    const cloudinaryPublicId = buildCloudinaryPublicId(league.id, parsed.data.categoryId, match.matchId)
+    const uploaded = await uploadVideoToCloudinary({
+      buffer: optimizedVideo.buffer,
+      mimetype: optimizedVideo.mimetype,
+      publicId: cloudinaryPublicId,
     })
-    await new Promise<void>((resolve, reject) => {
-      // Readable.from(Buffer) itera por bytes (números) y puede corromper el binario.
-      // Enviamos el Buffer como un único chunk.
-      Readable.from([optimizedVideo.buffer])
-        .pipe(uploadStream)
-        .on('error', reject)
-        .on('finish', () => resolve())
-    })
-    const fileId = uploadStream.id?.toString() ?? ''
-    if (!fileId) {
-      response.status(500).json({ message: 'No se pudo generar identificador de video' })
-      return
-    }
     const video = {
       id: uuidv4(),
       name: finalName,
-      url: buildPublicVideoUrl(request, fileId),
+      url: uploaded.secureUrl,
+      cloudinaryPublicId: uploaded.publicId,
       leagueId: league.id,
       categoryId: parsed.data.categoryId,
       matchId: request.params.matchId,
@@ -3380,10 +3430,23 @@ app.delete('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/:videoId
     response.status(404).json({ message: 'Partido jugado no encontrado' })
     return
   }
+  const videoToDelete = (match.highlightVideos || []).find((video) => video.id === request.params.videoId)
   const nextMatch = {
     ...match,
     highlightVideos: (match.highlightVideos || []).filter((video) => video.id !== request.params.videoId),
   }
+
+  if (videoToDelete?.cloudinaryPublicId && isCloudinaryConfigured) {
+    try {
+      await cloudinary.uploader.destroy(videoToDelete.cloudinaryPublicId, {
+        resource_type: 'video',
+        invalidate: true,
+      })
+    } catch (err) {
+      console.warn('[videos] No se pudo eliminar video en Cloudinary:', err)
+    }
+  }
+
   await savePlayedMatchToMongo(nextMatch)
   await deleteHighlightVideoFromMongo(request.params.videoId)
   response.json({ data: nextMatch })
