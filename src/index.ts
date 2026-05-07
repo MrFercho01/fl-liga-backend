@@ -3309,12 +3309,14 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
   }
   const safeName = parsed.data.name?.trim() || file.originalname || `video-${Date.now()}.mp4`
   try {
-    // El stub solo retorna el buffer original, mimetype estándar mp4
-    const optimizedBuffer = await transcodeVideoIfPossible(file.buffer)
-    const finalName = safeName.replace(/\.[^.]+$/, '').concat('.mp4')
+    const optimizedVideo = await transcodeVideoIfPossible(file.buffer, {
+      fileName: safeName,
+      mimetype: file.mimetype,
+    })
+    const finalName = optimizedVideo.transcoded
     const uploadStream = bucket.openUploadStream(finalName, {
       metadata: {
-        contentType: 'video/mp4',
+        contentType: optimizedVideo.mimetype,
         leagueId: league.id,
         categoryId: parsed.data.categoryId,
         matchId: match.matchId,
@@ -3322,7 +3324,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
       },
     })
     await new Promise<void>((resolve, reject) => {
-      Readable.from(optimizedBuffer)
+      Readable.from(optimizedVideo.buffer)
         .pipe(uploadStream)
         .on('error', reject)
         .on('finish', () => resolve())

@@ -43,11 +43,21 @@ export function normalizeTechnicalStaff(
 
 /**
  * Intenta transcodificar un video para optimizar su peso/formato.
- * Por ahora, retorna el mismo buffer. Integrar ffmpeg u otro en el futuro.
- * @param {Buffer} videoBuffer - Buffer del video original
- * @returns {Promise<Buffer>} - Buffer del video transcodificado (o el original)
+ * Por ahora, retorna el mismo buffer preservando nombre y mimetype originales.
  */
-export async function transcodeVideoIfPossible(videoBuffer: Buffer): Promise<Buffer> {
+export async function transcodeVideoIfPossible(
+  videoBuffer: Buffer,
+  input?: { fileName?: string; mimetype?: string },
+): Promise<{ transcoded: string; mimetype: string; buffer: Buffer }> {
   // TODO: Integrar lógica real de transcodificación (ffmpeg, cloud, etc.)
-  return videoBuffer;
+  const safeName = (input?.fileName || '').trim() || `video-${Date.now()}.mp4`
+  const safeMimetype = (input?.mimetype || '').startsWith('video/')
+    ? (input?.mimetype as string)
+    : 'video/mp4'
+
+  return {
+    transcoded: safeName,
+    mimetype: safeMimetype,
+    buffer: videoBuffer,
+  }
 }
