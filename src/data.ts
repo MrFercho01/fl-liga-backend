@@ -323,6 +323,29 @@ export const getRoundAwardsByLeagueFromMongo = async (leagueId: string): Promise
   const collection = await getRoundAwardsCollection();
   return collection.find({ leagueId }).toArray();
 };
+
+export const getLeagueCategoryResultsCollection = async () => {
+  if (!hasMongoConfigured()) throw new Error('MongoDB no configurado');
+  if (!mongoDb) await connectMongo();
+  return mongoDb!.collection<LeagueCategoryResult>('league_category_results');
+};
+
+export const getLeagueCategoryResultFromMongo = async (
+  leagueId: string,
+  categoryId: string,
+): Promise<LeagueCategoryResult | null> => {
+  const collection = await getLeagueCategoryResultsCollection();
+  return collection.findOne({ leagueId, categoryId });
+};
+
+export const saveLeagueCategoryResultToMongo = async (result: LeagueCategoryResult) => {
+  const collection = await getLeagueCategoryResultsCollection();
+  await collection.replaceOne(
+    { leagueId: result.leagueId, categoryId: result.categoryId },
+    result,
+    { upsert: true },
+  );
+};
 // Utilidad para normalizar o validar clientId público (acepta slug o UUID)
 export async function resolvePublicClientId(clientId: string): Promise<string | null> {
   if (typeof clientId !== 'string' || !clientId.trim()) return null;
@@ -406,6 +429,7 @@ export async function ensureCoreReadIndexes() {
   await mongoDb!.collection('played_matches').createIndex({ status: 1, playedAt: -1 });
   await mongoDb!.collection('played_matches').createIndex({ leagueId: 1, categoryId: 1, playedAt: -1 });
   await mongoDb!.collection('round_awards').createIndex({ leagueId: 1, categoryId: 1, round: 1 });
+  await mongoDb!.collection('league_category_results').createIndex({ leagueId: 1, categoryId: 1 }, { unique: true });
   await mongoDb!.collection('highlight_videos').createIndex({ leagueId: 1, categoryId: 1 });
 }
 
@@ -648,6 +672,31 @@ export interface RoundAwardsEntry {
   roundBestPlayerTeamId?: string
   roundBestPlayerTeamName?: string
   updatedAt: string
+}
+
+export interface LeagueCategoryResult {
+  leagueId: string
+  categoryId: string
+  finalizedAt: string
+  championTeamId: string
+  championTeamName: string
+  championTeamLogoUrl?: string
+  leagueMvpPlayerId: string
+  leagueMvpPlayerName: string
+  leagueMvpTeamId: string
+  leagueMvpTeamName: string
+  leagueMvpPlayerPhotoUrl?: string
+  bestGoalkeeperPlayerId: string
+  bestGoalkeeperPlayerName: string
+  bestGoalkeeperTeamId: string
+  bestGoalkeeperTeamName: string
+  bestGoalkeeperPlayerPhotoUrl?: string
+  topScorerPlayerId: string
+  topScorerPlayerName: string
+  topScorerTeamId: string
+  topScorerTeamName: string
+  topScorerPlayerPhotoUrl?: string
+  topScorerGoals: number
 }
 
 export interface AuditLogEntry {

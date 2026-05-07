@@ -95,3 +95,9 @@ export const knockoutResultSchema = z.object({
   penaltyHome: z.number().int().min(0).nullable().optional(),
   penaltyAway: z.number().int().min(0).nullable().optional(),
 })
+
+export const finalizeCategorySchema = z.object({
+  leagueMvpPlayerId: z.string().uuid(),
+  bestGoalkeeperPlayerId: z.string().uuid(),
+  topScorerPlayerId: z.string().uuid(),
+})

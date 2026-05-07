@@ -50,7 +50,7 @@ import {
 } from './live';
 import { setupSocketIO } from './io';
 import { requireAuth } from './requireAuth';
-import { createCategorySchema, updateCategorySchema, createKnockoutSchema, knockoutResultSchema } from './schemas';
+import { createCategorySchema, updateCategorySchema, createKnockoutSchema, knockoutResultSchema, finalizeCategorySchema } from './schemas';
 import {
   getAllLeaguesFromMongo,
   getActiveLeaguesFromMongo,
@@ -74,6 +74,8 @@ import {
   getRoundAwardsByLeagueFromMongo,
   getRoundAwardsByLeagueAndCategoryFromMongo,
   saveRoundAwardToMongo,
+  getLeagueCategoryResultFromMongo,
+  saveLeagueCategoryResultToMongo,
   getMatchEngagement,
   saveMatchEngagement,
   getLeagueFixture,
@@ -3911,6 +3913,200 @@ app.post('/api/push/unsubscribe', (request, response) => {
 // En producción, los eventos live:update se emiten por socket.io
 // En desarrollo, se mantiene el stub/broadcastLive local
 
+type FinalCandidate = {
+  playerId: string
+  playerName: string
+  teamId: string
+  teamName: string
+  photoUrl?: string
+  votes?: number
+  goals?: number
+  goalsConceded?: number
+  matches?: number
+}
+
+type FinalizationPreview = {
+  finalReady: boolean
+  finalReason?: string
+  champion: { teamId: string; teamName: string; teamLogoUrl?: string } | null
+  leagueMvpCandidates: FinalCandidate[]
+  bestGoalkeeperCandidates: FinalCandidate[]
+  topScorerCandidates: FinalCandidate[]
+  existingResult: Awaited<ReturnType<typeof getLeagueCategoryResultFromMongo>>
+}
+
+const normalizePositionLabel = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const isGoalkeeperPosition = (position: string) => {
+  const normalized = normalizePositionLabel(position)
+  return normalized.includes('arquero')
+    || normalized.includes('portero')
+    || normalized === 'gk'
+    || normalized.includes('goalkeeper')
+    || normalized.includes('arq')
+}
+
+const buildFinalizationPreview = async (leagueId: string, categoryId: string): Promise<FinalizationPreview> => {
+  const [league, teams, playedMatches, roundAwards, bracket, existingResult] = await Promise.all([
+    getLeagueByIdFromMongo(leagueId),
+    getTeamsByLeagueAndCategoryFromMongo(leagueId, categoryId, true),
+    getPlayedMatchesByLeagueAndCategoryFromMongo(leagueId, categoryId),
+    getRoundAwardsByLeagueAndCategoryFromMongo(leagueId, categoryId),
+    getKnockoutBracket(leagueId, categoryId),
+    getLeagueCategoryResultFromMongo(leagueId, categoryId),
+  ])
+
+  const teamById = new Map(teams.map((team) => [team.id, team]))
+
+  const finalRound = bracket?.rounds[bracket.rounds.length - 1]
+  const finalMatch = finalRound?.matches[0]
+  const finalReady = Boolean(finalMatch && finalMatch.status === 'finished' && finalMatch.winnerId && finalMatch.winnerName)
+  let champion: FinalizationPreview['champion'] = null
+  if (finalReady && finalMatch) {
+    const championLogoUrl = teamById.get(finalMatch.winnerId!)?.logoUrl
+    champion = championLogoUrl
+      ? { teamId: finalMatch.winnerId!, teamName: finalMatch.winnerName!, teamLogoUrl: championLogoUrl }
+      : { teamId: finalMatch.winnerId!, teamName: finalMatch.winnerName! }
+  }
+
+  const leagueMvpMap = new Map<string, FinalCandidate>()
+  for (const entry of roundAwards) {
+    if (!entry.roundBestPlayerId || !entry.roundBestPlayerName || !entry.roundBestPlayerTeamId || !entry.roundBestPlayerTeamName) continue
+    const existing = leagueMvpMap.get(entry.roundBestPlayerId)
+    if (existing) {
+      existing.votes = (existing.votes ?? 0) + 1
+      continue
+    }
+    const team = teamById.get(entry.roundBestPlayerTeamId)
+    const player = team?.players.find((p) => p.id === entry.roundBestPlayerId)
+    leagueMvpMap.set(entry.roundBestPlayerId, {
+      playerId: entry.roundBestPlayerId,
+      playerName: entry.roundBestPlayerName,
+      teamId: entry.roundBestPlayerTeamId,
+      teamName: entry.roundBestPlayerTeamName,
+      ...(player?.photoUrl ? { photoUrl: player.photoUrl } : {}),
+      votes: 1,
+    })
+  }
+  const leagueMvpCandidates = Array.from(leagueMvpMap.values()).sort((a, b) => (b.votes ?? 0) - (a.votes ?? 0))
+
+  const topScorerMap = new Map<string, FinalCandidate>()
+  for (const match of playedMatches) {
+    for (const player of match.players ?? []) {
+      if (!player.playerId || player.goals <= 0) continue
+      const existing = topScorerMap.get(player.playerId)
+      if (existing) {
+        existing.goals = (existing.goals ?? 0) + player.goals
+        continue
+      }
+      const team = teamById.get(player.teamId)
+      const roster = team?.players.find((p) => p.id === player.playerId)
+      topScorerMap.set(player.playerId, {
+        playerId: player.playerId,
+        playerName: player.playerName,
+        teamId: player.teamId,
+        teamName: player.teamName,
+        ...(roster?.photoUrl ? { photoUrl: roster.photoUrl } : {}),
+        goals: player.goals,
+      })
+    }
+  }
+  const topScorerCandidates = Array.from(topScorerMap.values()).sort((a, b) => (b.goals ?? 0) - (a.goals ?? 0))
+
+  const category = league?.categories?.find((item) => item.id === categoryId)
+  const pointsWin = category?.rules?.pointsWin ?? 3
+  const pointsDraw = category?.rules?.pointsDraw ?? 1
+  const pointsLoss = category?.rules?.pointsLoss ?? 0
+  const standings = new Map<string, { teamId: string; points: number; gd: number; gf: number }>()
+
+  for (const team of teams) {
+    standings.set(team.id, { teamId: team.id, points: 0, gd: 0, gf: 0 })
+  }
+
+  const teamIdByName = new Map(teams.map((team) => [team.name.trim().toLowerCase(), team.id]))
+  for (const match of playedMatches) {
+    if (typeof match.round === 'number' && match.round >= 1001) continue
+    const homeId = teamIdByName.get(match.homeTeamName.trim().toLowerCase())
+    const awayId = teamIdByName.get(match.awayTeamName.trim().toLowerCase())
+    if (!homeId || !awayId) continue
+    const homeGoals = match.homeStats?.goals ?? 0
+    const awayGoals = match.awayStats?.goals ?? 0
+
+    const home = standings.get(homeId)
+    const away = standings.get(awayId)
+    if (!home || !away) continue
+
+    home.gf += homeGoals
+    away.gf += awayGoals
+    home.gd += homeGoals - awayGoals
+    away.gd += awayGoals - homeGoals
+
+    if (homeGoals > awayGoals) {
+      home.points += pointsWin
+      away.points += pointsLoss
+    } else if (homeGoals < awayGoals) {
+      away.points += pointsWin
+      home.points += pointsLoss
+    } else {
+      home.points += pointsDraw
+      away.points += pointsDraw
+    }
+  }
+
+  const topTeamIds = Array.from(standings.values())
+    .sort((a, b) => (b.points - a.points) || (b.gd - a.gd) || (b.gf - a.gf))
+    .slice(0, 3)
+    .map((item) => item.teamId)
+
+  const goalkeeperMap = new Map<string, FinalCandidate>()
+  for (const match of playedMatches) {
+    for (const player of match.players ?? []) {
+      if (!player.playerId || !isGoalkeeperPosition(player.position ?? '')) continue
+      if (topTeamIds.length > 0 && !topTeamIds.includes(player.teamId)) continue
+
+      const team = teamById.get(player.teamId)
+      const roster = team?.players.find((p) => p.id === player.playerId)
+      const existing = goalkeeperMap.get(player.playerId)
+      if (existing) {
+        existing.matches = (existing.matches ?? 0) + 1
+        existing.goalsConceded = (existing.goalsConceded ?? 0) + (player.goalsConceded ?? 0)
+        continue
+      }
+      goalkeeperMap.set(player.playerId, {
+        playerId: player.playerId,
+        playerName: player.playerName,
+        teamId: player.teamId,
+        teamName: player.teamName,
+        ...(roster?.photoUrl ? { photoUrl: roster.photoUrl } : {}),
+        goalsConceded: player.goalsConceded ?? 0,
+        matches: 1,
+      })
+    }
+  }
+
+  const bestGoalkeeperCandidates = Array.from(goalkeeperMap.values()).sort((a, b) => {
+    const aAvg = (a.goalsConceded ?? 0) / Math.max(1, a.matches ?? 0)
+    const bAvg = (b.goalsConceded ?? 0) / Math.max(1, b.matches ?? 0)
+    if (aAvg !== bAvg) return aAvg - bAvg
+    return (b.matches ?? 0) - (a.matches ?? 0)
+  })
+
+  return {
+    finalReady,
+    ...(finalReady ? {} : { finalReason: 'La final aún no está cerrada con ganador.' }),
+    champion,
+    leagueMvpCandidates,
+    bestGoalkeeperCandidates,
+    topScorerCandidates,
+    existingResult,
+  }
+}
+
 // ─── KNOCKOUT BRACKET ENDPOINTS ────────────────────────────────────────────
 
 /** GET available formats for N qualified teams */
@@ -3944,6 +4140,123 @@ app.get('/api/admin/leagues/:leagueId/categories/:categoryId/knockout', requireA
     res.json({ data: bracket ?? null })
   } catch (err) {
     res.status(500).json({ message: 'Error al obtener bracket' })
+  }
+})
+
+app.get('/api/admin/leagues/:leagueId/categories/:categoryId/finalization-preview', requireAuth, async (req, res) => {
+  try {
+    const user = await requireAuth(req as any, res as any)
+    if (!user) return
+
+    const leagueId = String(req.params.leagueId ?? '')
+    const categoryId = String(req.params.categoryId ?? '')
+    const league = await getLeagueByIdFromMongo(leagueId)
+    if (!league) {
+      res.status(404).json({ message: 'Liga no encontrada' })
+      return
+    }
+
+    if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
+      res.status(403).json({ message: 'Sin acceso' })
+      return
+    }
+
+    const preview = await buildFinalizationPreview(leagueId, categoryId)
+    res.json({ data: preview })
+  } catch (err) {
+    console.error('[finalization] preview error:', err)
+    res.status(500).json({ message: 'Error al construir preview de finalización' })
+  }
+})
+
+app.post('/api/admin/leagues/:leagueId/categories/:categoryId/finalize', requireAuth, async (req, res) => {
+  try {
+    const user = await requireAuth(req as any, res as any)
+    if (!user) return
+
+    const leagueId = String(req.params.leagueId ?? '')
+    const categoryId = String(req.params.categoryId ?? '')
+    const league = await getLeagueByIdFromMongo(leagueId)
+    if (!league) {
+      res.status(404).json({ message: 'Liga no encontrada' })
+      return
+    }
+
+    if (user.role !== 'super_admin' && league.ownerUserId !== user.id) {
+      res.status(403).json({ message: 'Sin acceso' })
+      return
+    }
+
+    const parsed = finalizeCategorySchema.safeParse(req.body)
+    if (!parsed.success) {
+      res.status(400).json({ message: 'Payload inválido', errors: parsed.error.flatten() })
+      return
+    }
+
+    const preview = await buildFinalizationPreview(leagueId, categoryId)
+    if (!preview.finalReady || !preview.champion) {
+      res.status(400).json({ message: preview.finalReason ?? 'No se puede finalizar sin final completada' })
+      return
+    }
+
+    const leagueMvp = preview.leagueMvpCandidates.find((item) => item.playerId === parsed.data.leagueMvpPlayerId)
+    const goalkeeper = preview.bestGoalkeeperCandidates.find((item) => item.playerId === parsed.data.bestGoalkeeperPlayerId)
+    const topScorer = preview.topScorerCandidates.find((item) => item.playerId === parsed.data.topScorerPlayerId)
+
+    if (!leagueMvp) {
+      res.status(400).json({ message: 'La jugadora de la liga no pertenece a candidatas válidas' })
+      return
+    }
+    if (!goalkeeper) {
+      res.status(400).json({ message: 'La mejor arquera no pertenece a candidatas válidas' })
+      return
+    }
+    if (!topScorer) {
+      res.status(400).json({ message: 'La goleadora no pertenece a candidatas válidas' })
+      return
+    }
+
+    const result = {
+      leagueId,
+      categoryId,
+      finalizedAt: new Date().toISOString(),
+      championTeamId: preview.champion.teamId,
+      championTeamName: preview.champion.teamName,
+      ...(preview.champion.teamLogoUrl ? { championTeamLogoUrl: preview.champion.teamLogoUrl } : {}),
+      leagueMvpPlayerId: leagueMvp.playerId,
+      leagueMvpPlayerName: leagueMvp.playerName,
+      leagueMvpTeamId: leagueMvp.teamId,
+      leagueMvpTeamName: leagueMvp.teamName,
+      ...(leagueMvp.photoUrl ? { leagueMvpPlayerPhotoUrl: leagueMvp.photoUrl } : {}),
+      bestGoalkeeperPlayerId: goalkeeper.playerId,
+      bestGoalkeeperPlayerName: goalkeeper.playerName,
+      bestGoalkeeperTeamId: goalkeeper.teamId,
+      bestGoalkeeperTeamName: goalkeeper.teamName,
+      ...(goalkeeper.photoUrl ? { bestGoalkeeperPlayerPhotoUrl: goalkeeper.photoUrl } : {}),
+      topScorerPlayerId: topScorer.playerId,
+      topScorerPlayerName: topScorer.playerName,
+      topScorerTeamId: topScorer.teamId,
+      topScorerTeamName: topScorer.teamName,
+      ...(topScorer.photoUrl ? { topScorerPlayerPhotoUrl: topScorer.photoUrl } : {}),
+      topScorerGoals: topScorer.goals ?? 0,
+    }
+
+    await saveLeagueCategoryResultToMongo(result)
+    res.json({ data: result })
+  } catch (err) {
+    console.error('[finalization] finalize error:', err)
+    res.status(500).json({ message: 'Error al finalizar campeonato' })
+  }
+})
+
+app.get('/api/public/leagues/:leagueId/categories/:categoryId/final-result', async (req, res) => {
+  try {
+    const leagueId = String(req.params.leagueId ?? '')
+    const categoryId = String(req.params.categoryId ?? '')
+    const data = await getLeagueCategoryResultFromMongo(leagueId, categoryId)
+    res.json({ data: data ?? null })
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener resultado final' })
   }
 })
 
