@@ -3324,7 +3324,9 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
       },
     })
     await new Promise<void>((resolve, reject) => {
-      Readable.from(optimizedVideo.buffer)
+      // Readable.from(Buffer) itera por bytes (números) y puede corromper el binario.
+      // Enviamos el Buffer como un único chunk.
+      Readable.from([optimizedVideo.buffer])
         .pipe(uploadStream)
         .on('error', reject)
         .on('finish', () => resolve())
