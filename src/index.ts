@@ -501,9 +501,9 @@ app.get('/api/leagues', async (req, res) => {
     const user = await requireAuth(req, res);
     let leagues;
     if (user.role === 'super_admin' || user.id === SUPER_ADMIN_USER_ID) {
-      leagues = await getAllLeaguesFromMongo();
+      leagues = (await getAllLeaguesFromMongo()).filter((league) => league.active !== false);
     } else {
-      leagues = (await getAllLeaguesFromMongo()).filter(l => l.ownerUserId === user.id);
+      leagues = (await getAllLeaguesFromMongo()).filter((league) => league.ownerUserId === user.id && league.active !== false);
     }
     res.json({ data: leagues });
   } catch (err) {
@@ -1992,9 +1992,9 @@ app.post('/api/auth/login', async (req, res) => {
       // Si es client_admin, filtrar ligas por ownerUserId
       let leagues = [];
       if (user.role === 'client_admin') {
-        leagues = await getLeaguesByClientId(user.id);
+        leagues = (await getLeaguesByClientId(user.id)).filter((league) => league.active !== false);
       } else {
-        leagues = await getAllLeaguesFromMongo();
+        leagues = (await getAllLeaguesFromMongo()).filter((league) => league.active !== false);
       }
       // Mapear ownerUserId a organizationName
       const userMap = new Map(users.map(u => [u.id, u.organizationName || u.name || '']));
@@ -2589,11 +2589,62 @@ app.get('/api/admin/leagues/:leagueId/fixture', async (request, response) => {
     return
   }
 
-  const allTeams = await getAllTeamsFromMongo();
-  const teams = allTeams.filter(
-    (team) => team.leagueId === league.id && team.categoryId === categoryId && isTeamActive(team),
-  )
-  const rounds = generateFixture(teams)
+  const [teams, schedule, playedMatches] = await Promise.all([
+    getTeamsByLeagueAndCategoryFromMongo(league.id, categoryId, true),
+    getFixtureSchedulesByLeagueAndCategoryFromMongo(league.id, categoryId),
+    getPlayedMatchesByLeagueAndCategoryFromMongo(league.id, categoryId),
+  ])
+
+  let rounds: ReturnType<typeof generateFixture>
+  if (schedule.length > 0 || playedMatches.length > 0) {
+    const roundsMap = new Map<number, Array<{ homeTeamId: string; awayTeamId: string | null; hasBye: boolean }>>()
+    const addedKeys = new Set<string>()
+
+    const addMatchToRound = (round: number, homeTeamId: string | null, awayTeamId: string | null) => {
+      if (!homeTeamId || !awayTeamId) return
+      const key = `${round}:${homeTeamId}:${awayTeamId}`
+      if (addedKeys.has(key)) return
+      addedKeys.add(key)
+      if (!roundsMap.has(round)) roundsMap.set(round, [])
+      roundsMap.get(round)!.push({ homeTeamId, awayTeamId, hasBye: false })
+    }
+
+    const parseFixtureTeamIds = (matchId: string) => {
+      if (matchId.startsWith('manual__') || matchId.startsWith('ko__')) {
+        const parts = matchId.split('__')
+        return {
+          homeTeamId: parts[2] ?? null,
+          awayTeamId: parts[3] ?? null,
+        }
+      }
+
+      const segs = matchId.split('-')
+      if (segs.length >= 13) {
+        return {
+          homeTeamId: segs.slice(2, 7).join('-'),
+          awayTeamId: segs.slice(7, 12).join('-'),
+        }
+      }
+
+      return { homeTeamId: null, awayTeamId: null }
+    }
+
+    for (const entry of schedule) {
+      const { homeTeamId, awayTeamId } = parseFixtureTeamIds(entry.matchId)
+      addMatchToRound(entry.round, homeTeamId, awayTeamId)
+    }
+
+    for (const playedMatch of playedMatches) {
+      const { homeTeamId, awayTeamId } = parseFixtureTeamIds(playedMatch.matchId)
+      addMatchToRound(playedMatch.round, homeTeamId, awayTeamId)
+    }
+
+    rounds = Array.from(roundsMap.entries())
+      .sort(([left], [right]) => left - right)
+      .map(([round, matches]) => ({ round, matches }))
+  } else {
+    rounds = generateFixture(teams)
+  }
 
   response.json({
     data: {
@@ -2621,16 +2672,14 @@ app.get('/api/admin/leagues/:leagueId/fixture-schedule', async (request, respons
   }
 
   const categoryId = typeof request.query.categoryId === 'string' ? request.query.categoryId : ''
-  const allTeams = await getAllTeamsFromMongo();
+  const allTeams = await getTeamsByLeagueAndCategoryFromMongo(league.id, categoryId, true);
   const activeTeamIds = new Set(
     allTeams
-      .filter((team) => team.leagueId === league.id && (!categoryId || team.categoryId === categoryId) && isTeamActive(team))
       .map((team) => team.id),
   )
 
-  const allSchedules = await getAllFixtureSchedulesFromMongo();
-  const data = allSchedules.filter((item) => {
-    if (item.leagueId !== league.id || (categoryId && item.categoryId !== categoryId)) return false
+  const schedules = await getFixtureSchedulesByLeagueAndCategoryFromMongo(league.id, categoryId)
+  const data = schedules.filter((item) => {
     const parsed = parseMatchIdentity(item.matchId)
     if (!parsed) return true
     return activeTeamIds.has(parsed.homeTeamId) && activeTeamIds.has(parsed.awayTeamId)
