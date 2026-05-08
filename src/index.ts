@@ -3956,9 +3956,9 @@ app.post('/api/admin/live/lineup', async (request, response) => {
 
 const liveEventSchema = z.object({
   matchId: z.string().min(1),
-  teamId: z.string().uuid(),
-  playerId: z.string().uuid().nullable(),
-  substitutionInPlayerId: z.string().uuid().optional(),
+  teamId: z.string().min(1),
+  playerId: z.string().min(1).nullable(),
+  substitutionInPlayerId: z.string().min(1).optional(),
   staffRole: z.enum(['director', 'assistant']).optional(),
   type: z.enum([
     'shot',
