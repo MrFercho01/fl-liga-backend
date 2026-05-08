@@ -3235,6 +3235,19 @@ const buildCloudinaryPublicId = (leagueId: string, categoryId: string, matchId: 
   return `fl-liga/highlights/${sanitizePathPart(leagueId)}/${sanitizePathPart(categoryId)}/${sanitizePathPart(matchId)}-${suffix}`
 }
 
+const getErrorMessage = (err: unknown) => {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  if (err != null && typeof err === 'object' && 'message' in err && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message
+  }
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return 'Error no serializable'
+  }
+}
+
 const uploadVideoToCloudinary = async (payload: {
   buffer: Buffer
   mimetype: string
@@ -3268,7 +3281,7 @@ const uploadVideoToCloudinary = async (payload: {
       },
       (error, uploadResult) => {
         if (error) {
-          settle(error instanceof Error ? error : new Error(String(error)))
+          settle(error instanceof Error ? error : new Error(getErrorMessage(error)))
           return
         }
         if (!uploadResult?.secure_url || !uploadResult?.public_id) {
@@ -3280,14 +3293,14 @@ const uploadVideoToCloudinary = async (payload: {
     )
 
     uploadStream.on('error', (err: unknown) => {
-      settle(err instanceof Error ? err : new Error(String(err)))
+      settle(err instanceof Error ? err : new Error(getErrorMessage(err)))
     })
 
     // Readable.from(Buffer) itera por bytes (números) y puede corromper el binario.
     // Enviamos el Buffer como un único chunk.
     const src = Readable.from([payload.buffer])
     src.on('error', (err: unknown) => {
-      settle(err instanceof Error ? err : new Error(String(err)))
+      settle(err instanceof Error ? err : new Error(getErrorMessage(err)))
     })
     src.pipe(uploadStream)
   })
@@ -3422,16 +3435,7 @@ app.post('/api/admin/leagues/:leagueId/played-matches/:matchId/videos/upload', u
     await saveHighlightVideoToMongo(video)
     response.json({ data: nextMatch })
   } catch (err) {
-    let msg = 'Error desconocido'
-    if (err instanceof Error) {
-      msg = err.message
-    } else if (typeof err === 'string') {
-      msg = err
-    } else if (err != null && typeof (err as Record<string, unknown>).message === 'string') {
-      msg = (err as Record<string, unknown>).message as string
-    } else {
-      try { msg = JSON.stringify(err) } catch { msg = 'Error no serializable' }
-    }
+    const msg = getErrorMessage(err)
     console.error('[video upload] Error subiendo a Cloudinary:', msg)
     response.status(500).json({ message: `No se pudo subir el video: ${msg}` })
   }
