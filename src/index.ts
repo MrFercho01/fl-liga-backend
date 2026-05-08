@@ -1305,8 +1305,8 @@ app.post('/api/admin/teams/:teamId/players', async (req, res) => {
     if (!name || !nickname || !age || !number || !position) {
       return res.status(400).json({ message: 'Faltan campos requeridos' });
     }
-    const teams = await getAllTeamsFromMongo();
-    const team = teams.find((t) => t.id === teamId);
+    const collection = await getTeamsCollection();
+    const team = await collection.findOne({ id: teamId });
     if (!team) return res.status(404).json({ message: 'Equipo no encontrado' });
 
     const normalizedNumber = Number(number)
@@ -1339,7 +1339,7 @@ app.post('/api/admin/teams/:teamId/players', async (req, res) => {
       registrationStatus: registrationStatus === 'pending' ? 'pending' as const : 'registered' as const
     };
     team.players.push(newPlayer);
-    await saveTeamToMongo(team);
+    await collection.updateOne({ id: teamId }, { $set: { players: team.players } });
     res.json({ data: team });
   } catch (err) {
     res.status(500).json({ message: 'Error al agregar jugador', error: String(err) });
