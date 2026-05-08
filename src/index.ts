@@ -2138,6 +2138,68 @@ app.get('/api/public/client/:clientId/leagues', async (request, response) => {
 });
 
 app.get('/api/public/client/:clientId/engagement', async (request, response) => {
+
+app.get('/api/public/image-proxy', async (request, response) => {
+  try {
+    const rawUrl = typeof request.query.url === 'string' ? request.query.url.trim() : ''
+    if (!rawUrl) {
+      response.status(400).json({ message: 'url es requerido' })
+      return
+    }
+
+    let parsedUrl: URL
+    try {
+      parsedUrl = new URL(rawUrl)
+    } catch {
+      response.status(400).json({ message: 'url inválida' })
+      return
+    }
+
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      response.status(400).json({ message: 'Solo se permite http/https' })
+      return
+    }
+
+    const hostname = parsedUrl.hostname.toLowerCase()
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname.endsWith('.local')) {
+      response.status(400).json({ message: 'Host no permitido' })
+      return
+    }
+
+    const upstream = await fetch(parsedUrl.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+    })
+
+    if (!upstream.ok) {
+      response.status(502).json({ message: 'No se pudo obtener la imagen de origen' })
+      return
+    }
+
+    const contentType = upstream.headers.get('content-type') ?? ''
+    if (!contentType.toLowerCase().startsWith('image/')) {
+      response.status(415).json({ message: 'El recurso no es una imagen' })
+      return
+    }
+
+    const contentLength = Number.parseInt(upstream.headers.get('content-length') ?? '0', 10)
+    if (Number.isFinite(contentLength) && contentLength > 8_000_000) {
+      response.status(413).json({ message: 'Imagen demasiado grande (máx 8MB)' })
+      return
+    }
+
+    const arrayBuffer = await upstream.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+
+    response.setHeader('Access-Control-Allow-Origin', '*')
+    response.setHeader('Cache-Control', 'public, max-age=86400')
+    response.setHeader('Content-Type', contentType)
+    response.status(200).send(buffer)
+  } catch (error) {
+    console.error('[API] Error en /api/public/image-proxy:', error)
+    response.status(500).json({ message: 'Error al proxyear imagen' })
+  }
+});
   try {
     const { clientId } = request.params;
     const engagement = await getClientEngagement(clientId);
