@@ -3914,9 +3914,9 @@ app.post('/api/admin/live/penalty/kick', (request, response) => {
 // --- Lineup schema (corregido fuera del PATCH) ---
 const lineupSchema = z.object({
   matchId: z.string().min(1),
-  teamId: z.string().uuid(),
-  starters: z.array(z.string().uuid()),
-  substitutes: z.array(z.string().uuid()),
+  teamId: z.string().min(1),
+  starters: z.array(z.string().min(1)),
+  substitutes: z.array(z.string().min(1)),
   formationKey: z.string().trim().min(1).optional(),
 })
 
