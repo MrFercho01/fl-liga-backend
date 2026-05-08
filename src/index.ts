@@ -1308,13 +1308,33 @@ app.post('/api/admin/teams/:teamId/players', async (req, res) => {
     const teams = await getAllTeamsFromMongo();
     const team = teams.find((t) => t.id === teamId);
     if (!team) return res.status(404).json({ message: 'Equipo no encontrado' });
+
+    const normalizedNumber = Number(number)
+    if (Number.isNaN(normalizedNumber) || normalizedNumber < 1 || normalizedNumber > 99) {
+      return res.status(400).json({ message: 'Número de camiseta inválido' })
+    }
+
+    const hasDuplicatedNumber = team.players.some((player) => player.number === normalizedNumber)
+    if (hasDuplicatedNumber) {
+      return res.status(409).json({ message: 'El número de camiseta ya existe en el equipo' })
+    }
+
+    const normalizedName = String(name).trim().toLowerCase()
+    const normalizedNickname = String(nickname).trim().toLowerCase()
+    const hasDuplicatedIdentity = team.players.some(
+      (player) => player.name.trim().toLowerCase() === normalizedName && player.nickname.trim().toLowerCase() === normalizedNickname,
+    )
+    if (hasDuplicatedIdentity) {
+      return res.status(409).json({ message: 'Ya existe una jugadora con ese nombre y apodo en el equipo' })
+    }
+
     const newPlayer = {
       id: (Math.random().toString(36).slice(2) + Date.now()),
-      name,
-      nickname,
-      age,
-      number,
-      position,
+      name: String(name).trim(),
+      nickname: String(nickname).trim(),
+      age: Number(age),
+      number: normalizedNumber,
+      position: String(position).trim().toUpperCase(),
       photoUrl: photoUrl || '',
       registrationStatus: registrationStatus === 'pending' ? 'pending' as const : 'registered' as const
     };
