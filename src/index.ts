@@ -1,3 +1,91 @@
+
+import { app } from './server-stub';
+import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
+import { getAllHighlightVideosFromMongo, getUsersCollection } from './data';
+import { saveUserToMongo } from './saveUserToMongo';
+import type { AppUser } from './data';
+import 'dotenv/config';
+import { resolvePlayersOnField } from './utils';
+import { broadcastLive } from './live';
+import { z } from 'zod';
+import cors from 'cors';
+import express from 'express';
+import type { RegisteredTeam, RegisteredPlayer, Category, RuleSet } from './data';
+import { ensurePublicEngagement } from './engagement';
+import { getTeamsCollection, connectMongo, getLeaguesCollection } from './data';
+import { transcodeVideoIfPossible } from './utils';
+import {
+  getAllPlayedMatchesFromMongo,
+  getPlayedMatchesByLeagueFromMongo,
+  getPlayedMatchByLeagueCategoryAndMatchIdFromMongo,
+  getLivePlayedMatchesFromMongo,
+  getPlayedMatchesByLeagueAndCategoryFromMongo,
+  savePlayedMatchToMongo,
+  saveHighlightVideoToMongo,
+  getHighlightVideosByLeagueAndCategoryFromMongo,
+  deleteHighlightVideoFromMongo,
+  getVideosBucket,
+  getMongoObjectId,
+  getPlayedMatchesCollection
+} from './data';
+import { randomBytes } from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
+import { Collection, MongoClient } from 'mongodb';
+import { Readable } from 'stream';
+import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary'
+import { generateFixture } from './fixture';
+import {
+  syncTeamInAllMatches,
+  updateLineupWithFormation,
+  registerEvent,
+  removeEventById,
+  buildLiveSnapshot,
+  buildAllLiveSnapshots,
+  loadMatchForLive,
+  liveStores,
+  setTimerAction,
+  setMatchStatusAction,
+  startPenaltyShootout,
+  registerPenaltyKick,
+} from './live';
+import { setupSocketIO } from './io';
+import { requireAuth } from './requireAuth';
+import { createCategorySchema, updateCategorySchema, createKnockoutSchema, knockoutResultSchema, finalizeCategorySchema } from './schemas';
+import {
+  getAllLeaguesFromMongo,
+  getActiveLeaguesFromMongo,
+  getLeaguesByOwnerAndActiveFromMongo,
+  getLeagueByIdFromMongo,
+  saveLeagueToMongo,
+  getAllClientAccessTokensFromMongo,
+  saveClientAccessTokenToMongo,
+  renewClientAccessTokenInMongo,
+  getClientAccessTokenById,
+  getClientAccessTokenByToken,
+  revokeClientAccessTokenInMongo,
+  getAllTeamsFromMongo,
+  getTeamsByLeagueAndCategoryFromMongo,
+  saveTeamToMongo,
+  getAllFixtureSchedulesFromMongo,
+  getFixtureSchedulesByLeagueAndCategoryFromMongo,
+  getFixtureScheduleCollection,
+  saveFixtureScheduleToMongo,
+  getAllRoundAwardsFromMongo,
+  getRoundAwardsByLeagueFromMongo,
+  getRoundAwardsByLeagueAndCategoryFromMongo,
+  saveRoundAwardToMongo,
+  getLeagueCategoryResultFromMongo,
+  saveLeagueCategoryResultToMongo,
+  getMatchEngagement,
+  saveMatchEngagement,
+  getLeagueFixture,
+  getLeagueByIdAndOwnerFromMongo,
+  getLeaguesByClientId,
+  getClientEngagement,
+  saveClientEngagement,
+} from './data';
+
 // Editar partido jugado (goles, alineación, tarjetas, etc.)
 app.patch('/api/admin/leagues/:leagueId/played-matches/:matchId', async (req, res) => {
   try {
@@ -32,7 +120,6 @@ app.patch('/api/admin/leagues/:leagueId/played-matches/:matchId', async (req, re
     res.status(500).json({ ok: false, message: 'Error al actualizar partido', error: String(err) });
   }
 });
-import { app } from './server-stub';
 
 import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
 import { getAllHighlightVideosFromMongo, getUsersCollection } from './data';
