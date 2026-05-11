@@ -86,41 +86,6 @@ import {
   saveClientEngagement,
 } from './data';
 
-// Editar partido jugado (goles, alineación, tarjetas, etc.)
-app.patch('/api/admin/leagues/:leagueId/played-matches/:matchId', async (req, res) => {
-  try {
-    // Autenticación robusta
-    let user;
-    try {
-      user = await requireAuth(req, res);
-    } catch (authErr) {
-      if (!res.headersSent) {
-        res.status(401).json({ ok: false, message: 'No autenticado' });
-      }
-      return;
-    }
-    let { leagueId, matchId } = req.params;
-    if (Array.isArray(leagueId)) leagueId = leagueId[0];
-    if (Array.isArray(matchId)) matchId = matchId[0];
-    if (!leagueId || !matchId) {
-      res.status(400).json({ ok: false, message: 'Faltan parámetros de liga o partido' });
-      return;
-    }
-    const match = req.body;
-    if (!match || typeof match !== 'object') {
-      res.status(400).json({ ok: false, message: 'Faltan datos de partido a editar' });
-      return;
-    }
-    // Guardar partido editado en MongoDB
-    match.leagueId = leagueId;
-    match.matchId = matchId;
-    await savePlayedMatchToMongo(match);
-    res.json({ ok: true, message: 'Partido actualizado', data: match });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: 'Error al actualizar partido', error: String(err) });
-  }
-});
-
 import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
 import { getAllHighlightVideosFromMongo, getUsersCollection } from './data';
 import { saveUserToMongo } from './saveUserToMongo';
@@ -263,6 +228,40 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 
 
+// Editar partido jugado (goles, alineación, tarjetas, etc.)
+app.patch('/api/admin/leagues/:leagueId/played-matches/:matchId', async (req, res) => {
+  try {
+    // Autenticación robusta
+    let user;
+    try {
+      user = await requireAuth(req, res);
+    } catch (authErr) {
+      if (!res.headersSent) {
+        res.status(401).json({ ok: false, message: 'No autenticado' });
+      }
+      return;
+    }
+    let { leagueId, matchId } = req.params;
+    if (Array.isArray(leagueId)) leagueId = leagueId[0];
+    if (Array.isArray(matchId)) matchId = matchId[0];
+    if (!leagueId || !matchId) {
+      res.status(400).json({ ok: false, message: 'Faltan parámetros de liga o partido' });
+      return;
+    }
+    const match = req.body;
+    if (!match || typeof match !== 'object') {
+      res.status(400).json({ ok: false, message: 'Faltan datos de partido a editar' });
+      return;
+    }
+    // Guardar partido editado en MongoDB
+    match.leagueId = leagueId;
+    match.matchId = matchId;
+    await savePlayedMatchToMongo(match);
+    res.json({ ok: true, message: 'Partido actualizado', data: match });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: 'Error al actualizar partido', error: String(err) });
+  }
+});
 
 // Endpoint: obtener reglas de una categoría específica de una liga (robusto para FE)
 app.get('/api/admin/leagues/:leagueId/categories/:categoryId/rules', requireAuth, async (req, res) => {
