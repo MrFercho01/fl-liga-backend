@@ -168,8 +168,6 @@ import {
   getLeagueFixture,
   getLeagueByIdAndOwnerFromMongo,
   getLeaguesByClientId,
-  getClientEngagement,
-  saveClientEngagement,
   getAllUsersFromMongo,
   ensureCoreReadIndexes,
   getKnockoutBracket,
