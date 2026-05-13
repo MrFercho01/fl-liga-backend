@@ -1,20 +1,22 @@
-
-import { app } from './server-stub';
-import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
-import { getAllHighlightVideosFromMongo, getUsersCollection } from './data';
-import { saveUserToMongo } from './saveUserToMongo';
-import type { AppUser } from './data';
+import { app, httpServer, port } from './server-stub';
 import 'dotenv/config';
-import { resolvePlayersOnField } from './utils';
-import { broadcastLive } from './live';
-import { z } from 'zod';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import express from 'express';
-import type { RegisteredTeam, RegisteredPlayer, Category, RuleSet } from './data';
-import { ensurePublicEngagement } from './engagement';
-import { getTeamsCollection, connectMongo, getLeaguesCollection } from './data';
-import { transcodeVideoIfPossible } from './utils';
+import { z } from 'zod';
+import { randomBytes } from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
+import { Collection, MongoClient } from 'mongodb';
+import { Readable } from 'stream';
+import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary';
+
+// Data y tipos
 import {
+  getAllHighlightVideosFromMongo,
+  getUsersCollection,
+  getTeamsCollection,
+  connectMongo,
+  getLeaguesCollection,
   getAllPlayedMatchesFromMongo,
   getPlayedMatchesByLeagueFromMongo,
   getPlayedMatchByLeagueCategoryAndMatchIdFromMongo,
@@ -26,33 +28,7 @@ import {
   deleteHighlightVideoFromMongo,
   getVideosBucket,
   getMongoObjectId,
-  getPlayedMatchesCollection
-} from './data';
-import { randomBytes } from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
-import { Collection, MongoClient } from 'mongodb';
-import { Readable } from 'stream';
-import multer from 'multer';
-import { v2 as cloudinary } from 'cloudinary'
-import { generateFixture } from './fixture';
-import {
-  syncTeamInAllMatches,
-  updateLineupWithFormation,
-  registerEvent,
-  removeEventById,
-  buildLiveSnapshot,
-  buildAllLiveSnapshots,
-  loadMatchForLive,
-  liveStores,
-  setTimerAction,
-  setMatchStatusAction,
-  startPenaltyShootout,
-  registerPenaltyKick,
-} from './live';
-import { setupSocketIO } from './io';
-import { requireAuth } from './requireAuth';
-import { createCategorySchema, updateCategorySchema, createKnockoutSchema, knockoutResultSchema, finalizeCategorySchema } from './schemas';
-import {
+  getPlayedMatchesCollection,
   getAllLeaguesFromMongo,
   getActiveLeaguesFromMongo,
   getLeaguesByOwnerAndActiveFromMongo,
@@ -84,44 +60,21 @@ import {
   getLeaguesByClientId,
   getClientEngagement,
   saveClientEngagement,
+  getAllUsersFromMongo,
+  ensureCoreReadIndexes,
+  getKnockoutBracket,
+  saveKnockoutBracket,
+  deleteKnockoutBracket,
+  SUPER_ADMIN_USER_ID,
+  ensurePlayedMatchesIndexes,
 } from './data';
+import type { AppUser, RegisteredTeam, RegisteredPlayer, Category, RuleSet } from './data';
 
-import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
-import { getAllHighlightVideosFromMongo, getUsersCollection } from './data';
+// Otros módulos
 import { saveUserToMongo } from './saveUserToMongo';
-import type { AppUser } from './data';
-import 'dotenv/config';
-import { resolvePlayersOnField } from './utils';
-import { broadcastLive } from './live';
-import { z } from 'zod';
-import cors from 'cors';
-import express from 'express';
-import type { RegisteredTeam, RegisteredPlayer, Category, RuleSet } from './data';
-import { ensurePublicEngagement } from './engagement';
-import { getTeamsCollection, connectMongo, getLeaguesCollection } from './data';
-import { transcodeVideoIfPossible } from './utils';
+import { resolvePlayersOnField, transcodeVideoIfPossible } from './utils';
 import {
-  getAllPlayedMatchesFromMongo,
-  getPlayedMatchesByLeagueFromMongo,
-  getPlayedMatchByLeagueCategoryAndMatchIdFromMongo,
-  getLivePlayedMatchesFromMongo,
-  getPlayedMatchesByLeagueAndCategoryFromMongo,
-  savePlayedMatchToMongo,
-  saveHighlightVideoToMongo,
-  getHighlightVideosByLeagueAndCategoryFromMongo,
-  deleteHighlightVideoFromMongo,
-  getVideosBucket,
-  getMongoObjectId,
-  getPlayedMatchesCollection
-} from './data';
-import { randomBytes } from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
-import { Collection, MongoClient } from 'mongodb';
-import { Readable } from 'stream';
-import multer from 'multer';
-import { v2 as cloudinary } from 'cloudinary'
-import { generateFixture } from './fixture';
-import {
+  broadcastLive,
   syncTeamInAllMatches,
   updateLineupWithFormation,
   registerEvent,
@@ -135,45 +88,16 @@ import {
   startPenaltyShootout,
   registerPenaltyKick,
 } from './live';
+import { getPlayedMatchById, saveLiveMatchToMongo } from './liveMatchData';
 import { setupSocketIO } from './io';
 import { requireAuth } from './requireAuth';
-import { createCategorySchema, updateCategorySchema, createKnockoutSchema, knockoutResultSchema, finalizeCategorySchema } from './schemas';
 import {
-  getAllLeaguesFromMongo,
-  getActiveLeaguesFromMongo,
-  getLeaguesByOwnerAndActiveFromMongo,
-  getLeagueByIdFromMongo,
-  saveLeagueToMongo,
-  getAllClientAccessTokensFromMongo,
-  saveClientAccessTokenToMongo,
-  renewClientAccessTokenInMongo,
-  getClientAccessTokenById,
-  getClientAccessTokenByToken,
-  revokeClientAccessTokenInMongo,
-  getAllTeamsFromMongo,
-  getTeamsByLeagueAndCategoryFromMongo,
-  saveTeamToMongo,
-  getAllFixtureSchedulesFromMongo,
-  getFixtureSchedulesByLeagueAndCategoryFromMongo,
-  getFixtureScheduleCollection,
-  saveFixtureScheduleToMongo,
-  getAllRoundAwardsFromMongo,
-  getRoundAwardsByLeagueFromMongo,
-  getRoundAwardsByLeagueAndCategoryFromMongo,
-  saveRoundAwardToMongo,
-  getLeagueCategoryResultFromMongo,
-  saveLeagueCategoryResultToMongo,
-  getMatchEngagement,
-  saveMatchEngagement,
-  getLeagueFixture,
-  getLeagueByIdAndOwnerFromMongo,
-  getLeaguesByClientId,
-  getAllUsersFromMongo,
-  ensureCoreReadIndexes,
-  getKnockoutBracket,
-  saveKnockoutBracket,
-  deleteKnockoutBracket,
-} from './data';
+  createCategorySchema,
+  updateCategorySchema,
+  createKnockoutSchema,
+  knockoutResultSchema,
+  finalizeCategorySchema,
+} from './schemas';
 import {
   buildBracket,
   advanceWinner,
@@ -181,20 +105,10 @@ import {
   getAvailableFormats,
   parseKnockoutMatchId,
 } from './knockout';
-// ENDPOINTS AVANZADOS COMENTADOS PARA COMPILACIÓN LIMPIA
 import { buildTeamNameAliases, resolveTeamFromAliasMap } from './team-alias';
 import { vapidPublicKey, addPushSubscription, removePushSubscription, sendPushToMatch } from './webpush';
-
-// Importar SUPER_ADMIN_USER_ID
-import { SUPER_ADMIN_USER_ID } from './data';
-
-// Importar httpServer y port justo antes de arrancar el servidor para evitar duplicados
-import { httpServer, port } from './server-stub';
-
-// Inicializar índices de partidos jugados al arrancar el backend
-import { ensurePlayedMatchesIndexes } from './data'
-
-import { Request, Response, NextFunction } from 'express'
+import { ensurePublicEngagement } from './engagement';
+import { generateFixture } from './fixture';
 
 // Configuración CORS robusta: permitir FE producción y local
 /*app.use(cors({
